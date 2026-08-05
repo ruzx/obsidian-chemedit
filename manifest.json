@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-chemedit",
+  "name": "ChemEdit",
+  "version": "1.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Draw and edit chemical structures and reactions using Ketcher and SmilesDrawer.",
+  "author": "You",
+  "isDesktopOnly": true
+}
