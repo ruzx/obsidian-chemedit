@@ -34,8 +34,6 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var http = __toESM(require("http"));
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
 
 // node_modules/smiles-drawer/dist/smiles-drawer.min.mjs
 var uo = Object.create;
@@ -373,10 +371,10 @@ var ls = vo((Gi, Xi) => {
         }
       }
       return [q, z, X, y.length > 3 ? y[3] : 1];
-    }, lt = rt, hs = f.unpack, us = f.type, fs2 = P, Ki = O, Qi = m, gs = j;
+    }, lt = rt, hs = f.unpack, us = f.type, fs = P, Ki = O, Qi = m, gs = j;
     Ki.prototype.hsv = function() {
       return gs(this._rgb);
-    }, fs2.hsv = function() {
+    }, fs.hsv = function() {
       for (var l = [], h = arguments.length; h--; ) l[h] = arguments[h];
       return new (Function.prototype.bind.apply(Ki, [null].concat(l, ["hsv"])))();
     }, Qi.format.hsv = lt, Qi.autodetect.push({ p: 2, test: function() {
@@ -4766,13 +4764,14 @@ var DEFAULT_SETTINGS = {
   width: 300,
   height: 300,
   lightTheme: "light",
-  darkTheme: "dark",
-  compactDrawing: false
+  darkTheme: "dark"
 };
 var ChemEditPlugin = class extends import_obsidian.Plugin {
   server = null;
   port = 0;
   settings;
+  // Create a memory cache to make Ketcher load instantly after the first open!
+  assetCache = /* @__PURE__ */ new Map();
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new ChemEditSettingTab(this.app, this));
@@ -4798,12 +4797,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
       const drawerOptions = {
         width: this.settings.width,
-        height: this.settings.height,
-        compactDrawing: this.settings.compactDrawing,
-        atomVisualization: "default",
-        // <-- REQUIRED for Ac, Me, Et, etc.
-        explicitHydrogens: false
-        // <-- Helps compact drawing trigger correctly
+        height: this.settings.height
       };
       try {
         const Smi = Yr;
@@ -4851,8 +4845,9 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
   onunload() {
     if (this.server) {
       this.server.close();
-      console.log("ChemEdit: Ketcher server shut down.");
+      console.log("ChemEdit: Ketcher proxy server shut down.");
     }
+    this.assetCache.clear();
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -4860,7 +4855,6 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
-  /** Helper to open a blank Ketcher modal and insert into the active file */
   openNewDrawingModal() {
     const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
     if (!view) {
@@ -4871,7 +4865,6 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       this.insertSmilesAtCursor(view.editor, newSmiles);
     }).open();
   }
-  /** Helper to insert the SMILES block into the editor */
   insertSmilesAtCursor(editor, smiles) {
     const cursor = editor.getCursor();
     const textToInsert = `\`\`\`smiles
@@ -4882,46 +4875,15 @@ ${smiles}
     editor.setCursor({ line: cursor.line + 3, ch: 0 });
   }
   startKetcherServer() {
-    const basePath = this.app.vault.adapter.getBasePath();
-    const ketcherDir = path.join(basePath, this.manifest.dir, "ketcher");
-    this.server = http.createServer((req, res) => {
-      const urlPath = req.url.split("?")[0];
-      let filePath = path.join(ketcherDir, urlPath === "/" ? "index.html" : urlPath);
-      if (!filePath.startsWith(ketcherDir)) {
-        res.writeHead(403);
-        res.end();
-        return;
-      }
-      const extname2 = path.extname(filePath);
-      let contentType = "text/html";
-      switch (extname2) {
-        case ".js":
-          contentType = "application/javascript";
-          break;
-        case ".css":
-          contentType = "text/css";
-          break;
-        case ".json":
-          contentType = "application/json";
-          break;
-        case ".png":
-          contentType = "image/png";
-          break;
-        case ".svg":
-          contentType = "image/svg+xml";
-          break;
-        case ".wasm":
-          contentType = "application/wasm";
-          break;
-      }
-      fs.readFile(filePath, (err, content) => {
-        if (err) {
-          res.writeHead(404);
-          res.end("File not found");
-          return;
-        }
-        if (filePath.endsWith("index.html")) {
-          let html = content.toString("utf-8");
+    this.server = http.createServer(async (req, res) => {
+      try {
+        const urlPath = req.url;
+        if (urlPath === "/" || urlPath === "/index.html" || urlPath.startsWith("/?")) {
+          const response = await (0, import_obsidian.requestUrl)({
+            url: "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html",
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+          });
+          let html = response.text;
           const bridgeScript = `
                     <script>
                         window.addEventListener('message', function(event) {
@@ -4942,18 +4904,47 @@ ${smiles}
                             }
                         });
                     </script>`;
-          html = html.replace("</head>", bridgeScript + "</head>");
+          html = html.replace("<head>", "<head>\n" + bridgeScript);
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(html, "utf-8");
-        } else {
-          res.writeHead(200, { "Content-Type": contentType });
-          res.end(content);
+          return;
         }
-      });
+        const cleanPath = urlPath.split("?")[0];
+        const targetUrl = cleanPath.startsWith("/KetcherDemoSA") ? "https://lifescience.opensource.epam.com" + urlPath : "https://lifescience.opensource.epam.com/KetcherDemoSA" + (urlPath.startsWith("/") ? "" : "/") + urlPath;
+        if (this.assetCache.has(targetUrl)) {
+          const cached = this.assetCache.get(targetUrl);
+          res.writeHead(200, {
+            "Content-Type": cached.type,
+            "Access-Control-Allow-Origin": "*"
+          });
+          res.end(Buffer.from(cached.data));
+          return;
+        }
+        const assetRes = await (0, import_obsidian.requestUrl)({
+          url: targetUrl,
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "*/*" }
+        });
+        let contentType = "application/octet-stream";
+        if (cleanPath.endsWith(".js")) contentType = "application/javascript";
+        else if (cleanPath.endsWith(".css")) contentType = "text/css";
+        else if (cleanPath.endsWith(".svg")) contentType = "image/svg+xml";
+        else if (cleanPath.endsWith(".woff2")) contentType = "font/woff2";
+        else if (cleanPath.endsWith(".png")) contentType = "image/png";
+        else if (cleanPath.endsWith(".json")) contentType = "application/json";
+        else if (assetRes.headers["content-type"]) contentType = assetRes.headers["content-type"];
+        this.assetCache.set(targetUrl, { type: contentType, data: assetRes.arrayBuffer });
+        res.writeHead(assetRes.status || 200, {
+          "Content-Type": contentType,
+          "Access-Control-Allow-Origin": "*"
+        });
+        res.end(Buffer.from(assetRes.arrayBuffer));
+      } catch (e) {
+        res.writeHead(500);
+        res.end();
+      }
     });
     this.server.listen(0, "127.0.0.1", () => {
       this.port = (this.server?.address()).port;
-      console.log(`ChemEdit: Ketcher local server running on port ${this.port}`);
     });
   }
 };
@@ -5044,10 +5035,6 @@ var ChemEditSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("Dark Theme").setDesc("Color theme used when Obsidian is in Dark Mode").addDropdown((dropdown) => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.darkTheme).onChange(async (value) => {
       this.plugin.settings.darkTheme = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian.Setting(containerEl).setName("Compact Drawing").setDesc('Linearize simple structures and abbreviate common functional groups (e.g. show "Ac" instead of acetyl group)').addToggle((toggle) => toggle.setValue(this.plugin.settings.compactDrawing).onChange(async (value) => {
-      this.plugin.settings.compactDrawing = value;
       await this.plugin.saveSettings();
     }));
   }
