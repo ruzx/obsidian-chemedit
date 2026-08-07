@@ -542,7 +542,8 @@ export default class ChemEditPlugin extends Plugin {
         this.registerMarkdownCodeBlockProcessor("cdxml", (s, e, c) => fileCodeblockProcessor(s, e, c, "cdxml"));
 
         // 4. --- TRADITIONAL SMILES CODEBLOCKS ---
-        this.registerMarkdownCodeBlockProcessor("smiles", (source, el) => {
+        // Notice we added 'ctx' right here vvvvv
+        this.registerMarkdownCodeBlockProcessor("smiles", (source, el, ctx) => {
             const cleanSmiles = source.trim();
             const wrapper = document.createElement("div");
             wrapper.style.cursor = "pointer";
@@ -581,6 +582,8 @@ export default class ChemEditPlugin extends Plugin {
             wrapper.addEventListener("dblclick", () => {
                 const view = this.app.workspace.getActiveViewOfType(MarkdownView);
                 if (!view) return;
+                
+                // Now ctx is defined and can find the block!
                 const info = ctx.getSectionInfo(el);
                 
                 // @ts-ignore
@@ -1281,7 +1284,28 @@ class ChemEditSettingTab extends PluginSettingTab {
                 </div>`;
             }
         });
-        
+        containerEl.createEl('h3', { text: 'Smart Paste Behavior' });
+
+        new Setting(containerEl)
+            .setName('Auto-format pasted SMILES')
+            .setDesc('Automatically wrap pasted SMILES strings in a codeblock so they render as images instantly.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.smartPasteSmiles)
+                .onChange(async (value) => {
+                    this.plugin.settings.smartPasteSmiles = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('Auto-format pasted MOL text')
+            .setDesc('Automatically wrap pasted MOL files (from ChemDraw/Marvin) in a codeblock.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.smartPasteMol)
+                .onChange(async (value) => {
+                    this.plugin.settings.smartPasteMol = value;
+                    await this.plugin.saveSettings();
+                }));
+				
         containerEl.createEl('br');
         containerEl.createEl('h3', { text: 'Block Embeds' });
 

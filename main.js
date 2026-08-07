@@ -4813,7 +4813,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
         }).open();
       }
     });
-    this.registerMarkdownPostProcessor(async (el, ctx2) => {
+    this.registerMarkdownPostProcessor(async (el, ctx) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       const nodes = [];
       let node;
@@ -4821,9 +4821,9 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       for (const n of nodes) {
         const text = n.nodeValue || "";
         if (this.settings.inlineSmilesPrefix && text.includes(this.settings.inlineSmilesPrefix)) {
-          this.processInlineString(n, text, this.settings.inlineSmilesPrefix, "smiles", ctx2.sourcePath);
+          this.processInlineString(n, text, this.settings.inlineSmilesPrefix, "smiles", ctx.sourcePath);
         } else if (this.settings.inlineMolPrefix && text.includes(this.settings.inlineMolPrefix)) {
-          this.processInlineString(n, text, this.settings.inlineMolPrefix, "file", ctx2.sourcePath);
+          this.processInlineString(n, text, this.settings.inlineMolPrefix, "file", ctx.sourcePath);
         }
       }
     });
@@ -4879,12 +4879,12 @@ ${cleanText}
         new import_obsidian.Notice("Place your cursor inside an inline $smiles= string first!");
       }
     });
-    this.registerMarkdownPostProcessor(async (el, ctx2) => {
+    this.registerMarkdownPostProcessor(async (el, ctx) => {
       const embeds = el.querySelectorAll(".internal-embed");
       embeds.forEach(async (embed) => {
         const src = embed.getAttribute("src");
         if (src && (src.toLowerCase().endsWith(".mol") || src.toLowerCase().endsWith(".cdxml"))) {
-          const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx2.sourcePath);
+          const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx.sourcePath);
           if (!file || !(file instanceof import_obsidian.TFile)) return;
           embed.empty();
           const wrapper = document.createElement("div");
@@ -4924,7 +4924,7 @@ ${cleanText}
         }
       });
     });
-    this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx2) => {
+    this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
       const { parseYaml } = require("obsidian");
       const wrapper = el.createDiv();
       wrapper.style.border = "1px solid var(--background-modifier-border)";
@@ -5091,7 +5091,7 @@ ${cleanText}
             e.stopPropagation();
             const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
             if (!view) return;
-            const info = ctx2.getSectionInfo(el);
+            const info = ctx.getSectionInfo(el);
             new KetcherModal(this, originalSmiles, "smiles", (newData) => {
               const editor = view.editor;
               if (info) {
@@ -5131,7 +5131,7 @@ ${cleanText}
         wrapper.innerHTML = `<div style="padding: 20px; color: var(--text-error); background: var(--background-secondary); border-radius: 8px;"><b>ELN Formatting Error:</b><br>${err.message}</div>`;
       }
     });
-    const fileCodeblockProcessor = async (source, el, ctx2, defaultFormat) => {
+    const fileCodeblockProcessor = async (source, el, ctx, defaultFormat) => {
       const wrapper = el.createDiv();
       wrapper.style.textAlign = "center";
       wrapper.style.border = "1px solid var(--background-modifier-border)";
@@ -5142,7 +5142,7 @@ ${cleanText}
       const match = source.match(/\[\[(.*?)\]\]/);
       if (match && match[1]) {
         const link = match[1];
-        const file = this.app.metadataCache.getFirstLinkpathDest(link, ctx2.sourcePath);
+        const file = this.app.metadataCache.getFirstLinkpathDest(link, ctx.sourcePath);
         if (file && file instanceof import_obsidian.TFile) {
           const format = file.extension.toLowerCase();
           wrapper.title = `Double-click to edit ${file.name}`;
@@ -5185,7 +5185,7 @@ ${cleanText}
         e.stopPropagation();
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (!view) return;
-        const info = ctx2.getSectionInfo(el);
+        const info = ctx.getSectionInfo(el);
         new KetcherModal(this, rawData, defaultFormat, (newData, isFile) => {
           const editor = view.editor;
           if (info) {
@@ -5210,7 +5210,7 @@ ${newData}
     };
     this.registerMarkdownCodeBlockProcessor("mol", (s, e, c) => fileCodeblockProcessor(s, e, c, "mol"));
     this.registerMarkdownCodeBlockProcessor("cdxml", (s, e, c) => fileCodeblockProcessor(s, e, c, "cdxml"));
-    this.registerMarkdownCodeBlockProcessor("smiles", (source, el) => {
+    this.registerMarkdownCodeBlockProcessor("smiles", (source, el, ctx) => {
       const cleanSmiles = source.trim();
       const wrapper = document.createElement("div");
       wrapper.style.cursor = "pointer";
@@ -5879,6 +5879,15 @@ var ChemEditSettingTab = class extends import_obsidian.PluginSettingTab {
                 </div>`;
       }
     });
+    containerEl.createEl("h3", { text: "Smart Paste Behavior" });
+    new import_obsidian.Setting(containerEl).setName("Auto-format pasted SMILES").setDesc("Automatically wrap pasted SMILES strings in a codeblock so they render as images instantly.").addToggle((toggle) => toggle.setValue(this.plugin.settings.smartPasteSmiles).onChange(async (value) => {
+      this.plugin.settings.smartPasteSmiles = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Auto-format pasted MOL text").setDesc("Automatically wrap pasted MOL files (from ChemDraw/Marvin) in a codeblock.").addToggle((toggle) => toggle.setValue(this.plugin.settings.smartPasteMol).onChange(async (value) => {
+      this.plugin.settings.smartPasteMol = value;
+      await this.plugin.saveSettings();
+    }));
     containerEl.createEl("br");
     containerEl.createEl("h3", { text: "Block Embeds" });
     new import_obsidian.Setting(containerEl).setName("Image Width").setDesc("Width of the rendered structure blocks (pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.width.toString()).onChange(async (v) => {
