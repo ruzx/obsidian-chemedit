@@ -34,8 +34,6 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var http = __toESM(require("http"));
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
 
 // node_modules/smiles-drawer/dist/smiles-drawer.min.mjs
 var uo = Object.create;
@@ -373,10 +371,10 @@ var ls = vo((Gi, Xi) => {
         }
       }
       return [q, z, X, y.length > 3 ? y[3] : 1];
-    }, lt = rt, hs = f.unpack, us = f.type, fs2 = P, Ki = O, Qi = m, gs = j;
+    }, lt = rt, hs = f.unpack, us = f.type, fs = P, Ki = O, Qi = m, gs = j;
     Ki.prototype.hsv = function() {
       return gs(this._rgb);
-    }, fs2.hsv = function() {
+    }, fs.hsv = function() {
       for (var l = [], h = arguments.length; h--; ) l[h] = arguments[h];
       return new (Function.prototype.bind.apply(Ki, [null].concat(l, ["hsv"])))();
     }, Qi.format.hsv = lt, Qi.autodetect.push({ p: 2, test: function() {
@@ -4765,8 +4763,12 @@ typeof window < "u" && window.document && window.document.createElement && (wind
 var DEFAULT_SETTINGS = {
   width: 300,
   height: 300,
+  inlineWidth: 150,
+  inlineHeight: 150,
   lightTheme: "light",
-  darkTheme: "dark"
+  darkTheme: "dark",
+  inlineSmilesPrefix: "$smiles=",
+  inlineMolPrefix: "$mol="
 };
 var ChemEditPlugin = class extends import_obsidian.Plugin {
   server = null;
@@ -4798,6 +4800,20 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       }
     });
     this.registerMarkdownPostProcessor(async (el, ctx) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      const nodes = [];
+      let node;
+      while (node = walker.nextNode()) nodes.push(node);
+      for (const n of nodes) {
+        const text = n.nodeValue || "";
+        if (this.settings.inlineSmilesPrefix && text.includes(this.settings.inlineSmilesPrefix)) {
+          this.processInlineString(n, text, this.settings.inlineSmilesPrefix, "smiles", ctx.sourcePath);
+        } else if (this.settings.inlineMolPrefix && text.includes(this.settings.inlineMolPrefix)) {
+          this.processInlineString(n, text, this.settings.inlineMolPrefix, "file", ctx.sourcePath);
+        }
+      }
+    });
+    this.registerMarkdownPostProcessor(async (el, ctx) => {
       const embeds = el.querySelectorAll(".internal-embed");
       embeds.forEach(async (embed) => {
         const src = embed.getAttribute("src");
@@ -4818,7 +4834,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
           embed.appendChild(wrapper);
           const fileData = await this.app.vault.read(file);
           const format = file.extension.toLowerCase();
-          const previewEl = await this.renderMoleculeToPreview(fileData, format);
+          const previewEl = await this.renderMoleculeToPreview(fileData, format, false);
           if (!wrapper.isConnected) return;
           wrapper.innerHTML = "";
           if (previewEl) {
@@ -4832,7 +4848,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
             new KetcherModal(this, freshData, format, async (newData) => {
               await this.app.vault.modify(file, newData);
               wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
-              const updatedEl = await this.renderMoleculeToPreview(newData, format);
+              const updatedEl = await this.renderMoleculeToPreview(newData, format, false);
               if (updatedEl && wrapper.isConnected) {
                 wrapper.innerHTML = "";
                 wrapper.appendChild(updatedEl);
@@ -4858,21 +4874,18 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
           wrapper.title = `Double-click to edit ${file.name}`;
           wrapper.innerHTML = `<span class="color-text-muted">Loading preview...</span>`;
           const data = await this.app.vault.read(file);
-          const previewEl = await this.renderMoleculeToPreview(data, format);
+          const previewEl = await this.renderMoleculeToPreview(data, format, false);
           if (!wrapper.isConnected) return;
           wrapper.empty();
-          if (previewEl) {
-            wrapper.appendChild(previewEl);
-          } else {
-            wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b><br><span class="color-text-muted">Double-click to open Ketcher</span></div>`;
-          }
+          if (previewEl) wrapper.appendChild(previewEl);
+          else wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b><br><span class="color-text-muted">Double-click to open Ketcher</span></div>`;
           wrapper.addEventListener("dblclick", async (e) => {
             e.stopPropagation();
             const freshData = await this.app.vault.read(file);
             new KetcherModal(this, freshData, format, async (newData) => {
               await this.app.vault.modify(file, newData);
               wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
-              const updatedEl = await this.renderMoleculeToPreview(newData, format);
+              const updatedEl = await this.renderMoleculeToPreview(newData, format, false);
               if (updatedEl && wrapper.isConnected) {
                 wrapper.empty();
                 wrapper.appendChild(updatedEl);
@@ -4932,6 +4945,92 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       });
     });
   }
+  async processInlineString(textNode, fullText, prefix, type, sourcePath) {
+    const startIndex = fullText.indexOf(prefix);
+    let endIndex = fullText.indexOf(" ", startIndex);
+    if (endIndex === -1) endIndex = fullText.length;
+    const rawData = fullText.substring(startIndex + prefix.length, endIndex).trim();
+    if (!rawData) return;
+    const beforeText = fullText.substring(0, startIndex);
+    const afterText = fullText.substring(endIndex);
+    const parent = textNode.parentNode;
+    if (!parent) return;
+    const wrapper = document.createElement("span");
+    wrapper.className = "chem-inline-wrapper";
+    wrapper.style.display = "inline-block";
+    wrapper.style.verticalAlign = "middle";
+    wrapper.style.cursor = "pointer";
+    wrapper.style.margin = "0 4px";
+    wrapper.title = "Double-click to edit";
+    wrapper.innerHTML = `<small class="color-text-muted">\u23F3</small>`;
+    parent.insertBefore(document.createTextNode(beforeText), textNode);
+    parent.insertBefore(wrapper, textNode);
+    parent.insertBefore(document.createTextNode(afterText), textNode);
+    parent.removeChild(textNode);
+    const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
+    const drawerOptions = { width: this.settings.inlineWidth, height: this.settings.inlineHeight };
+    if (type === "smiles") {
+      try {
+        const Smi = Yr;
+        wrapper.innerHTML = "";
+        if (rawData.includes(">")) {
+          Smi.parseReaction(rawData, (tree) => {
+            const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
+            wrapper.appendChild(rxnDrawer.draw(tree, "svg", theme));
+          });
+        } else {
+          const canvas = document.createElement("canvas");
+          wrapper.appendChild(canvas);
+          Smi.parse(rawData, (tree) => {
+            const drawer = new Smi.Drawer(drawerOptions);
+            drawer.draw(tree, canvas, theme);
+          });
+        }
+      } catch (e) {
+        wrapper.innerHTML = "\u274C";
+      }
+      wrapper.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        if (!view) return;
+        new KetcherModal(this, rawData, "smiles", (newData) => {
+          const editor = view.editor;
+          const content = editor.getValue();
+          const updatedContent = content.replace(prefix + rawData, prefix + newData);
+          editor.setValue(updatedContent);
+        }).open();
+      });
+    } else if (type === "file") {
+      const cleanFileName = rawData.replace("[[", "").replace("]]", "");
+      const file = this.app.metadataCache.getFirstLinkpathDest(cleanFileName, sourcePath);
+      if (file && file instanceof import_obsidian.TFile) {
+        const format = file.extension.toLowerCase();
+        const fileData = await this.app.vault.read(file);
+        const previewEl = await this.renderMoleculeToPreview(fileData, format, true);
+        if (previewEl && wrapper.isConnected) {
+          wrapper.innerHTML = "";
+          wrapper.appendChild(previewEl);
+        } else {
+          wrapper.innerHTML = `\u{1F9EA}`;
+        }
+        wrapper.addEventListener("dblclick", async (e) => {
+          e.stopPropagation();
+          const freshData = await this.app.vault.read(file);
+          new KetcherModal(this, freshData, format, async (newData) => {
+            await this.app.vault.modify(file, newData);
+            wrapper.innerHTML = `\u23F3`;
+            const updatedEl = await this.renderMoleculeToPreview(newData, format, true);
+            if (updatedEl && wrapper.isConnected) {
+              wrapper.innerHTML = "";
+              wrapper.appendChild(updatedEl);
+            }
+          }).open();
+        });
+      } else {
+        wrapper.innerHTML = `\u274C`;
+      }
+    }
+  }
   onunload() {
     if (this.server) this.server.close();
     if (this.hiddenIframe) this.hiddenIframe.remove();
@@ -4962,11 +5061,11 @@ ${smiles}
     editor.replaceRange(textToInsert, cursor);
     editor.setCursor({ line: cursor.line + 3, ch: 0 });
   }
-  async renderMoleculeToPreview(data, format) {
+  async renderMoleculeToPreview(data, format, isInline = false) {
     return new Promise((resolve) => {
       const id = Math.random().toString(36).substring(7);
       this.renderQueue.set(id, resolve);
-      this.headlessQueue.push({ id, data, format, resolve });
+      this.headlessQueue.push({ id, data, format, isInline, resolve });
       this.processHeadlessQueue();
     });
   }
@@ -4989,7 +5088,8 @@ ${smiles}
       type: "renderPreview",
       id: task.id,
       data: task.data,
-      format: task.format
+      format: task.format,
+      isInline: task.isInline
     }, "*");
   }
   setupHeadlessRenderer() {
@@ -5014,11 +5114,14 @@ ${smiles}
         }
         const resolver = this.renderQueue.get(event.data.id);
         if (resolver) {
+          const isInline = event.data.isInline;
+          const w = isInline ? this.settings.inlineWidth : this.settings.width;
+          const h = isInline ? this.settings.inlineHeight : this.settings.height;
           if (event.data.smiles) {
             try {
               const Smi = Yr;
               const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
-              const drawerOptions = { width: this.settings.width, height: this.settings.height };
+              const drawerOptions = { width: w, height: h };
               if (event.data.smiles.includes(">")) {
                 const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
                 Smi.parseReaction(event.data.smiles, (tree) => {
@@ -5038,8 +5141,13 @@ ${smiles}
           } else if (event.data.svgUrl) {
             const img = document.createElement("img");
             img.src = event.data.svgUrl;
-            img.style.maxWidth = "100%";
-            img.style.maxHeight = "400px";
+            if (isInline) {
+              img.style.maxWidth = `${w}px`;
+              img.style.maxHeight = `${h}px`;
+            } else {
+              img.style.maxWidth = "100%";
+              img.style.maxHeight = "400px";
+            }
             resolver(img);
           } else {
             resolver(null);
@@ -5051,11 +5159,12 @@ ${smiles}
       }
     });
   }
-  getKetcherDir() {
-    const basePath = this.app.vault.adapter.getBasePath();
-    let baseDir = path.join(basePath, this.manifest.dir, "ketcher");
-    if (!fs.existsSync(path.join(baseDir, "index.html")) && fs.existsSync(path.join(baseDir, "standalone", "index.html"))) {
-      baseDir = path.join(baseDir, "standalone");
+  /** Secure file reading without 'fs' or 'path' to pass Obsidian Security Checks */
+  async getKetcherDir() {
+    let baseDir = `${this.manifest.dir}/ketcher`;
+    const adapter = this.app.vault.adapter;
+    if (!await adapter.exists(`${baseDir}/index.html`) && await adapter.exists(`${baseDir}/standalone/index.html`)) {
+      baseDir = `${baseDir}/standalone`;
     }
     return baseDir;
   }
@@ -5071,10 +5180,10 @@ ${smiles}
             cleanPath = cleanPath.substring("/KetcherDemoSA".length);
           }
           if (cleanPath === "" || cleanPath === "/") cleanPath = "/index.html";
-          const ketcherDir = this.getKetcherDir();
-          const localFilePath = path.join(ketcherDir, cleanPath);
+          const ketcherDir = await this.getKetcherDir();
+          const localFilePath = `${ketcherDir}${cleanPath}`;
           const isApiCall = cleanPath.startsWith("/v2/");
-          const isOfflineMode = !isApiCall && fs.existsSync(localFilePath) && fs.statSync(localFilePath).isFile();
+          const isOfflineMode = !isApiCall && await this.app.vault.adapter.exists(localFilePath);
           const bridgeScript = `
                     <script>
                         window.addEventListener('message', function(event) {
@@ -5113,9 +5222,9 @@ ${smiles}
                                     Promise.resolve(p).then(function() {
                                         return window.ketcher.getSmiles();
                                     }).then(function(smiles) {
-                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, smiles: smiles }, '*');
+                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, smiles: smiles, isInline: event.data.isInline }, '*');
                                     }).catch(function() {
-                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: null }, '*');
+                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: null, isInline: event.data.isInline }, '*');
                                     });
                                 };
 
@@ -5128,7 +5237,7 @@ ${smiles}
                                         window.ketcher.generateImage(event.data.data, { outputFormat: 'svg', backgroundColor: 'transparent' })
                                             .then(function(blob) {
                                                 var reader = new FileReader();
-                                                reader.onload = function() { window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: reader.result }, '*'); };
+                                                reader.onload = function() { window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: reader.result, isInline: event.data.isInline }, '*'); };
                                                 reader.readAsDataURL(blob);
                                             })
                                             .catch(function(err) {
@@ -5142,57 +5251,76 @@ ${smiles}
                             }
                         });
                         var checkReady = setInterval(function() {
-                            if (window.ketcher) {
+                            if (window.ketcher && window.ketcher.generateImage) {
                                 clearInterval(checkReady);
                                 window.parent.postMessage({ type: 'headlessReady' }, '*');
                             }
                         }, 200);
                     </script>`;
+          if (isApiCall) {
+            const targetUrl2 = "https://lifescience.opensource.epam.com" + urlPath;
+            const bodyBuffer = Buffer.concat(chunks);
+            const reqOptions = {
+              url: targetUrl2,
+              method: req.method,
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Origin": "https://lifescience.opensource.epam.com",
+                "Referer": "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html"
+              }
+            };
+            if (req.headers["content-type"]) reqOptions.headers["Content-Type"] = req.headers["content-type"];
+            if (req.method !== "GET" && req.method !== "HEAD" && bodyBuffer.length > 0) {
+              reqOptions.body = bodyBuffer.buffer.slice(bodyBuffer.byteOffset, bodyBuffer.byteOffset + bodyBuffer.byteLength);
+            }
+            try {
+              const assetRes = await (0, import_obsidian.requestUrl)(reqOptions);
+              res.writeHead(assetRes.status || 200, { "Content-Type": assetRes.headers["content-type"] || "application/json", "Access-Control-Allow-Origin": "*" });
+              res.end(Buffer.from(assetRes.arrayBuffer));
+            } catch (e) {
+              res.writeHead(e.status || 500, { "Access-Control-Allow-Origin": "*" });
+              res.end();
+            }
+            return;
+          }
           if (isOfflineMode) {
-            const ext = path.extname(localFilePath);
+            const ext = cleanPath.split(".").pop()?.toLowerCase();
             let mime = "application/octet-stream";
-            if (ext === ".html") mime = "text/html";
-            else if (ext === ".js") mime = "application/javascript";
-            else if (ext === ".css") mime = "text/css";
-            else if (ext === ".svg") mime = "image/svg+xml";
-            else if (ext === ".wasm") mime = "application/wasm";
-            else if (ext === ".json") mime = "application/json";
-            const content = fs.readFileSync(localFilePath);
+            if (ext === "html") mime = "text/html";
+            else if (ext === "js") mime = "application/javascript";
+            else if (ext === "css") mime = "text/css";
+            else if (ext === "svg") mime = "image/svg+xml";
+            else if (ext === "wasm") mime = "application/wasm";
+            else if (ext === "json") mime = "application/json";
             if (cleanPath === "/index.html") {
-              let html = content.toString("utf-8");
+              let html = await this.app.vault.adapter.read(localFilePath);
               html = html.replace("<head>", "<head>\n" + bridgeScript);
               res.writeHead(200, { "Content-Type": "text/html" });
               res.end(html);
             } else {
+              const content = await this.app.vault.adapter.readBinary(localFilePath);
               res.writeHead(200, { "Content-Type": mime, "Access-Control-Allow-Origin": "*" });
-              res.end(content);
+              res.end(Buffer.from(content));
             }
             return;
           }
-          let targetUrl = isApiCall ? "https://lifescience.opensource.epam.com" + cleanPath : "https://lifescience.opensource.epam.com/KetcherDemoSA" + cleanPath;
+          const targetUrl = "https://lifescience.opensource.epam.com/KetcherDemoSA" + cleanPath;
           if (req.method === "GET" && this.assetCache.has(targetUrl)) {
             const cached = this.assetCache.get(targetUrl);
             res.writeHead(200, { "Content-Type": cached.type, "Access-Control-Allow-Origin": "*" });
             res.end(Buffer.from(cached.data));
             return;
           }
-          const bodyBuffer = Buffer.concat(chunks);
-          const reqOptions = {
-            url: targetUrl,
-            method: req.method,
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0.0.0 Safari/537.36",
-              "Accept": "*/*",
-              "Origin": "https://lifescience.opensource.epam.com",
-              "Referer": "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html"
-            }
-          };
-          if (req.headers["content-type"]) reqOptions.headers["Content-Type"] = req.headers["content-type"];
-          if (req.method !== "GET" && req.method !== "HEAD" && bodyBuffer.length > 0) {
-            reqOptions.body = bodyBuffer.buffer.slice(bodyBuffer.byteOffset, bodyBuffer.byteOffset + bodyBuffer.byteLength);
-          }
           try {
-            const assetRes = await (0, import_obsidian.requestUrl)(reqOptions);
+            const assetRes = await (0, import_obsidian.requestUrl)({
+              url: targetUrl,
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "*/*",
+                "Referer": "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html"
+              }
+            });
             if (cleanPath === "/index.html") {
               if (assetRes.status >= 400) throw new Error(`HTTP ${assetRes.status}`);
               let html = assetRes.text;
@@ -5201,13 +5329,14 @@ ${smiles}
               res.end(html);
               return;
             }
-            let contentType = assetRes.headers["content-type"] || "application/octet-stream";
+            let contentType = "application/octet-stream";
             if (cleanPath.endsWith(".js")) contentType = "application/javascript";
             else if (cleanPath.endsWith(".css")) contentType = "text/css";
             else if (cleanPath.endsWith(".wasm")) contentType = "application/wasm";
             else if (cleanPath.endsWith(".svg")) contentType = "image/svg+xml";
             else if (cleanPath.endsWith(".json")) contentType = "application/json";
-            if (req.method === "GET" && assetRes.status === 200) {
+            else if (assetRes.headers["content-type"]) contentType = assetRes.headers["content-type"];
+            if (req.method === "GET") {
               this.assetCache.set(targetUrl, { type: contentType, data: assetRes.arrayBuffer });
             }
             res.writeHead(assetRes.status || 200, { "Content-Type": contentType, "Access-Control-Allow-Origin": "*" });
@@ -5221,7 +5350,7 @@ ${smiles}
                                 <p><i>Error: ${e.message || "404 Not Found"}</i></p>
                             </div>`);
             } else {
-              res.writeHead(e.status || 404, { "Access-Control-Allow-Origin": "*" });
+              res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
               res.end();
             }
           }
@@ -5355,32 +5484,53 @@ var ChemEditSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "ChemEdit Settings" });
-    const ketcherDir = this.plugin.getKetcherDir();
-    const isOffline = fs.existsSync(path.join(ketcherDir, "index.html"));
     containerEl.createEl("h3", { text: "Offline Mode Status" });
     const statusEl = containerEl.createEl("div", { cls: "setting-item-description" });
-    if (isOffline) {
-      statusEl.innerHTML = `<span style="color:var(--text-success); font-size:1.2em">\u2705 <b>Offline Mode Active</b></span><br>Local Ketcher installation detected. Your molecules are rendering rapidly, entirely offline and securely!`;
-    } else {
-      statusEl.innerHTML = `<span style="color:var(--text-warning); font-size:1.2em">\u26A0\uFE0F <b>Online Mode</b></span><br>Ketcher is currently streaming from EPAM Servers.<br><br>
-            <div style="background:var(--background-secondary); border:1px solid var(--background-modifier-border); padding: 15px; border-radius: 5px; margin-top: 10px; color: var(--text-normal)">
-                <b>To enable lightning-fast Offline Mode:</b><br><br>
-                1. Download <a href="https://github.com/epam/ketcher/releases/download/v2.28.0/ketcher-standalone-2.28.0.zip" target="_blank"><b>ketcher-standalone.zip</b></a>.<br>
-                2. Extract the folder into your Obsidian Vault plugins folder so it looks like this:<br>
-                <code style="display:block; margin: 10px 0; padding: 10px; background: var(--background-primary); border-radius: 4px;">.../.obsidian/plugins/chemedit/ketcher/index.html</code>
-                <i>(Note: If it extracts as a folder named 'standalone', you can just drop that whole folder into the 'ketcher' folder. The plugin will auto-detect it!)</i><br><br>
-                3. Restart Obsidian.
-            </div>`;
-    }
+    statusEl.innerHTML = `Checking offline status...`;
+    this.plugin.getKetcherDir().then(async (ketcherDir) => {
+      const isOffline = await this.app.vault.adapter.exists(`${ketcherDir}/index.html`);
+      if (isOffline) {
+        statusEl.innerHTML = `<span style="color:var(--text-success); font-size:1.2em">\u2705 <b>Offline Mode Active</b></span><br>Local Ketcher installation detected. Your molecules are rendering rapidly, entirely offline and securely!`;
+      } else {
+        statusEl.innerHTML = `<span style="color:var(--text-warning); font-size:1.2em">\u26A0\uFE0F <b>Online Mode</b></span><br>Ketcher is currently streaming from EPAM servers.<br><br>
+                <div style="background:var(--background-secondary); border:1px solid var(--background-modifier-border); padding: 15px; border-radius: 5px; margin-top: 10px; color: var(--text-normal)">
+                    <b>To enable lightning-fast Offline Mode:</b><br><br>
+                    1. Download <a href="https://github.com/epam/ketcher/releases/download/v2.28.0/ketcher-standalone-2.28.0.zip" target="_blank"><b>ketcher-standalone.zip</b></a>.<br>
+                    2. Extract the folder into your Obsidian Vault plugins folder so it looks like this:<br>
+                    <code style="display:block; margin: 10px 0; padding: 10px; background: var(--background-primary); border-radius: 4px;">.../.obsidian/plugins/chemedit/ketcher/index.html</code>
+                    <i>(Note: If it extracts as a folder named 'standalone', you can just drop that whole folder into the 'ketcher' folder. The plugin will auto-detect it!)</i><br><br>
+                    3. Restart Obsidian.
+                </div>`;
+      }
+    });
     containerEl.createEl("br");
-    new import_obsidian.Setting(containerEl).setName("Image Width").setDesc("Set the width of the rendered SMILES structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.width.toString()).onChange(async (value) => {
-      this.plugin.settings.width = parseInt(value) || 300;
+    containerEl.createEl("h3", { text: "Block Embeds" });
+    new import_obsidian.Setting(containerEl).setName("Image Width").setDesc("Width of the rendered structure blocks (pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.width.toString()).onChange(async (v) => {
+      this.plugin.settings.width = parseInt(v) || 300;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Image Height").setDesc("Set the height of the rendered SMILES structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.height.toString()).onChange(async (value) => {
-      this.plugin.settings.height = parseInt(value) || 300;
+    new import_obsidian.Setting(containerEl).setName("Image Height").setDesc("Height of the rendered structure blocks (pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.height.toString()).onChange(async (v) => {
+      this.plugin.settings.height = parseInt(v) || 300;
       await this.plugin.saveSettings();
     }));
+    containerEl.createEl("h3", { text: "Inline Embeds (Tables & Sentences)" });
+    new import_obsidian.Setting(containerEl).setName("Inline Image Width").setDesc("Max width for structures rendered inline (e.g. $smiles=...)").addText((text) => text.setPlaceholder("150").setValue(this.plugin.settings.inlineWidth.toString()).onChange(async (v) => {
+      this.plugin.settings.inlineWidth = parseInt(v) || 150;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Inline Image Height").setDesc("Max height for structures rendered inline").addText((text) => text.setPlaceholder("150").setValue(this.plugin.settings.inlineHeight.toString()).onChange(async (v) => {
+      this.plugin.settings.inlineHeight = parseInt(v) || 150;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Inline SMILES Prefix").setDesc("Text prefix used to trigger inline SMILES rendering").addText((text) => text.setValue(this.plugin.settings.inlineSmilesPrefix).onChange(async (v) => {
+      this.plugin.settings.inlineSmilesPrefix = v;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Inline File Prefix").setDesc("Text prefix used to trigger inline .mol and .cdxml rendering").addText((text) => text.setValue(this.plugin.settings.inlineMolPrefix).onChange(async (v) => {
+      this.plugin.settings.inlineMolPrefix = v;
+      await this.plugin.saveSettings();
+    }));
+    containerEl.createEl("h3", { text: "Theming" });
     const themeOptions = {
       "light": "Light",
       "dark": "Dark",
