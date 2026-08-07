@@ -180,9 +180,3 @@ ChemEdit combines features that would otherwise require several plugins:
 - Experimental Electronic Lab Notebook (ELN) with stoichiometry calculations.
 
 ---
-
-## ❤️ Support
-
-If you find ChemEdit useful and would like to support its development, you can buy me a coffee on Ko-fi:
-
-[☕ Support ChemEdit on Ko-fi](https://ko-fi.com/ruzal)
