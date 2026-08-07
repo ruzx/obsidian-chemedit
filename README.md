@@ -1,104 +1,183 @@
 # ChemEdit
 
-**Bring chemistry to Obsidian.** 
+**Bring chemistry to Obsidian.**
 
-ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by **Ketcher** and **SmilesDrawer**, it allows you to natively draw reactions, edit `.mol` files, and preview ChemDraw (`.cdxml`) files directly inside your vault without ever switching apps.
+ChemEdit is a fully integrated chemical structure editor and viewer for Obsidian. Powered by **Ketcher** and **SmilesDrawer**, it lets you draw molecules and reactions, edit `.mol` files, preview ChemDraw (`.cdxml`) files, and work with SMILES directly inside your vault—without switching applications.
 
 ### Quick Demo
-
 <video src="https://github.com/user-attachments/assets/e215352a-7717-4c9a-bf95-c134b9a81ecd" controls width="800"></video>
+
+---
 
 ## ✨ Features
 
-- **Native File Support:** Render and edit `.cdxml` and `.mol` files directly.
-- **Double-Click to Edit:** Click any rendered molecule to open the visual drawing interface.
-- **Auto-Save:** Hit "Save" in the editor to instantly overwrite the `.mol`/`.cdxml` file on your hard drive and update the preview.
-- **Smart Themes:** Structures automatically adapt to your Obsidian Light/Dark mode.
-- **Reactions:** Full support for drawing and rendering complex chemical reactions.
+- **Native chemistry support** — Render and edit `.mol` and `.cdxml` files directly.
+- **Visual editor** — Double-click any rendered structure to open it in Ketcher.
+- **Automatic saving** — Save directly back to the original `.mol` or `.cdxml` file.
+- **SMILES support** — Render, edit, and update SMILES code blocks.
+- **Reaction editor** — Draw and edit complete chemical reactions.
+- **Theme-aware rendering** — Structures automatically adapt to Obsidian's light and dark themes.
+- **Offline mode** — Work entirely locally with no internet connection.
 
 ---
 
-## 🚀 How to Use
+# 🚀 Usage
 
-### 1. ChemDraw & Mol files (.cdxml, .mol)
+## Mol and ChemDraw files (`.mol`, `.cdxml`)
 
-Drop a chemistry file into your vault and embed it in your note:
+Place a chemistry file anywhere inside your vault and embed it in a note.
 
-```markdown
+### MOL file
 
+````markdown
 ```mol
-[[aspirine.mol]]
+[[aspirin.mol]]
 ```
-```
+`````
 
+### ChemDraw file
+
+````markdown
 ```mol
-[[aspirine.cdxml]]
+[[aspirin.cdxml]]
 ```
-```
+````
 
-Embedding cdxml and mol:
+ChemEdit replaces the standard file preview with a rendered SVG image.
+
+Double-click the rendered structure to open it in the visual editor. Press **Save** to overwrite the original file and immediately refresh the preview.
+
+### Demo
+
 <video src="https://github.com/user-attachments/assets/d7ce9f1f-9e65-4383-8ce9-01281ace382d" controls width="800"></video>
 
+> **Note**
+>
+> ChemEdit uses Ketcher's open-source conversion engine for `.cdxml` files. Most standard molecules and reactions are fully supported, but certain ChemDraw-specific formatting and proprietary objects may not render identically.
 
-ChemEdit replaces the generic file box with a SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
+---
 
-> ⚠️ **Disclaimer on `.cdxml` files:** ChemEdit uses Ketcher's open-source conversion engine. While most standard structures and reactions work perfectly, highly complex formatting or proprietary ChemDraw-specific objects may not be 100% supported.
+## SMILES
 
-### 2. SMILES Strings
+Write SMILES directly inside a Markdown code block.
 
-Write SMILES strings directly in your markdown using code blocks:
-
-```markdown
+````markdown
 ```smiles
 CC(=O)OC1=CC=CC=C1C(=O)O
 ```
+````
+
+ChemEdit automatically renders the structure.
+
+Double-click the structure to edit it visually. Saving updates the original SMILES code block automatically.
+
+---
+
+## Draw a new molecule
+
+Click the **hexagon ribbon icon**, or run the command:
+
+> **ChemEdit: Draw new SMILES molecule**
+
+Draw your molecule in Ketcher and press **Save**. The generated SMILES will be inserted at the current cursor position.
+
+---
+
+# ⚡ Offline Mode
+
+By default, ChemEdit uses **Online Proxy Mode**, loading Ketcher from EPAM's servers. This requires an internet connection and may be affected by API availability or rate limits.
+
+Installing Ketcher locally enables **Offline Mode**, which provides:
+
+* Faster loading
+* Local rendering
+* No internet connection required
+* Improved privacy
+* No API limits
+
+## Enable Offline Mode
+
+1. Download the latest **ketcher-standalone.zip** from the official Ketcher releases.
+2. Open your vault:
+
+```
+.obsidian/plugins/chemedit/
 ```
 
-*Double-click the structure to edit it visually. Saving will automatically update the text in your code block.*
+3. Create a folder named:
 
-### 3. Draw from Scratch
+```
+ketcher
+```
 
-Click the **Hexagon Icon** in your left-hand ribbon (or use the Command Palette: *Draw new SMILES molecule*) to open a blank canvas. Draw your structure, hit Save, and it will be inserted exactly where you are typing.
+4. Extract the archive into that folder so the following file exists:
 
----
+```
+.obsidian/plugins/chemedit/ketcher/index.html
+```
 
-## ⚡ Online vs. Offline Mode
+5. Restart Obsidian.
+6. Open **Settings → ChemEdit**.
 
-By default, ChemEdit runs in **Online Proxy Mode**, streaming the editor from EPAM's servers. Rendering previews requires an internet connection and may be subject to API rate-limiting.
+If everything is installed correctly, you'll see:
 
-For the ultimate experience, enable **Offline Mode**. Previews generate instantly, files are processed securely on your local machine, and everything works without Wi-Fi!
-
-### How to enable Offline Mode:
-
-1. Download the latest `ketcher-standalone.zip` from the [Official Ketcher Releases](https://github.com/epam/ketcher/releases/latest).
-2. Go to your Obsidian vault's plugin folder: `.obsidian/plugins/chemedit/`
-3. Create a folder named `ketcher`.
-4. Extract the `.zip` contents into that folder. It should look like this:
-   `.../.obsidian/plugins/chemedit/ketcher/index.html`
-5. Restart Obsidian. 
-6. Go to **Settings > ChemEdit**. You should see a green ✅ **Offline Mode Active** status!
+✅ **Offline Mode Active**
 
 ---
 
-## 📥 Installation
+# 📥 Installation
 
-**From Obsidian Community Plugins (Recommended)**
+## Community Plugins (Recommended)
 
-1. Open **Settings → Community plugins**.
-2. Click **Browse** and search for **ChemEdit**.
-3. Click **Install** and then **Enable**.
+1. Open **Settings → Community Plugins**.
+2. Click **Browse**.
+3. Search for **ChemEdit**.
+4. Click **Install**.
+5. Click **Enable**.
 
-**Manual Installation**
+---
 
-1. Download `main.js` and `manifest.json` from the [Releases page](https://github.com/ruzx/obsidian-chemedit/releases).
-2. Place them in your vault at `.obsidian/plugins/chemedit/`.
-3. Reload plugins and enable ChemEdit.
+## Manual Installation
 
-## 🐛 Feedback & Bugs
+1. Download **main.js**, **manifest.json**, and **styles.css** (if available) from the latest GitHub Release.
+2. Copy them into:
 
-Found a bug or have a feature request? Please [open an issue on GitHub](https://github.com/ruzx/obsidian-chemedit/issues). 
+```
+.obsidian/plugins/chemedit/
+```
 
-## 🏆 Acknowledgements
+3. Reload Obsidian.
+4. Enable **ChemEdit** under **Community Plugins**.
 
-- [Ketcher](https://github.com/epam/ketcher) by EPAM Systems
-- [SmilesDrawer](https://github.com/reymond-group/smilesDrawer) by the Reymond Group
+---
+
+# 🐞 Bug Reports
+
+If you encounter a bug or would like to request a feature, please open an issue on GitHub.
+
+[https://github.com/ruzx/obsidian-chemedit/issues](https://github.com/ruzx/obsidian-chemedit/issues)
+
+---
+
+# 🙏 Acknowledgements
+
+* **Ketcher** — [https://github.com/epam/ketcher](https://github.com/epam/ketcher)
+* **SmilesDrawer** — [https://github.com/reymond-group/SmilesDrawer](https://github.com/reymond-group/SmilesDrawer)
+
+
+
+| Feature | Supported |
+|---------|:---------:|
+| SMILES | ✅ |
+| MOL | ✅ |
+| CDXML | ✅ (most files) |
+| Reactions | ✅ |
+| Offline mode | ✅ |
+| Light/Dark themes | ✅ |
+| Edit by double-click | ✅ |
+
+![GitHub release](https://img.shields.io/github/v/release/ruzx/obsidian-chemedit)
+![Downloads](https://img.shields.io/github/downloads/ruzx/obsidian-chemedit/total)
+![License](https://img.shields.io/github/license/ruzx/obsidian-chemedit)
+![Obsidian](https://img.shields.io/badge/Obsidian-Plugin-7C3AED)
+
