@@ -29,14 +29,18 @@ Drop a chemistry file into your vault and embed it in your note:
 ```mol
 [[aspirine.mol]]
 ```
-
+```
 
 ```mol
 [[aspirine.cdxml]]
 ```
 ```
 
-ChemEdit replaces the generic file box with a crisp SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
+Embedding cdxml and mol:
+<video src="https://github.com/user-attachments/assets/d7ce9f1f-9e65-4383-8ce9-01281ace382d" controls width="800"></video>
+
+
+ChemEdit replaces the generic file box with a SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
 
 > ⚠️ **Disclaimer on `.cdxml` files:** ChemEdit uses Ketcher's open-source conversion engine. While most standard structures and reactions work perfectly, highly complex formatting or proprietary ChemDraw-specific objects may not be 100% supported.
 
