@@ -1,6 +1,6 @@
 {
   "name": "obsidian-chemedit",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "description": "A plugin for displaying and editing chemical structures in Obsidian",
   "main": "main.js",
   "scripts": {
