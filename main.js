@@ -34,6 +34,8 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var http = __toESM(require("http"));
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
 
 // node_modules/smiles-drawer/dist/smiles-drawer.min.mjs
 var uo = Object.create;
@@ -371,10 +373,10 @@ var ls = vo((Gi, Xi) => {
         }
       }
       return [q, z, X, y.length > 3 ? y[3] : 1];
-    }, lt = rt, hs = f.unpack, us = f.type, fs = P, Ki = O, Qi = m, gs = j;
+    }, lt = rt, hs = f.unpack, us = f.type, fs2 = P, Ki = O, Qi = m, gs = j;
     Ki.prototype.hsv = function() {
       return gs(this._rgb);
-    }, fs.hsv = function() {
+    }, fs2.hsv = function() {
       for (var l = [], h = arguments.length; h--; ) l[h] = arguments[h];
       return new (Function.prototype.bind.apply(Ki, [null].concat(l, ["hsv"])))();
     }, Qi.format.hsv = lt, Qi.autodetect.push({ p: 2, test: function() {
@@ -4770,35 +4772,128 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
   server = null;
   port = 0;
   settings;
-  // Create a memory cache to make Ketcher load instantly after the first open!
   assetCache = /* @__PURE__ */ new Map();
+  hiddenIframe;
+  isHeadlessReady = false;
+  isProcessingHeadless = false;
+  headlessQueue = [];
+  renderQueue = /* @__PURE__ */ new Map();
+  renderTimeouts = /* @__PURE__ */ new Map();
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new ChemEditSettingTab(this.app, this));
     this.startKetcherServer();
-    this.addRibbonIcon("hexagon", "Draw New Molecule (ChemEdit)", () => {
+    this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
+    this.registerExtensions(["mol", "cdxml"], "chem-file-view");
+    this.addRibbonIcon("hexagon", "Draw New Molecule", () => {
       this.openNewDrawingModal();
     });
     this.addCommand({
       id: "insert-new-molecule",
-      name: "Draw new molecule/reaction",
-      editorCallback: (editor, view) => {
-        new KetcherModal(this, "", (newSmiles) => {
-          this.insertSmilesAtCursor(editor, newSmiles);
+      name: "Draw new SMILES molecule",
+      editorCallback: (editor) => {
+        new KetcherModal(this, "", "smiles", (newData) => {
+          this.insertSmilesAtCursor(editor, newData);
         }).open();
       }
     });
-    this.registerMarkdownCodeBlockProcessor("smiles", (source, el, ctx) => {
+    this.registerMarkdownPostProcessor(async (el, ctx) => {
+      const embeds = el.querySelectorAll(".internal-embed");
+      embeds.forEach(async (embed) => {
+        const src = embed.getAttribute("src");
+        if (src && (src.toLowerCase().endsWith(".mol") || src.toLowerCase().endsWith(".cdxml"))) {
+          const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx.sourcePath);
+          if (!file || !(file instanceof import_obsidian.TFile)) return;
+          embed.empty();
+          const wrapper = document.createElement("div");
+          wrapper.style.cursor = "pointer";
+          wrapper.style.border = "1px solid var(--background-modifier-border)";
+          wrapper.style.borderRadius = "5px";
+          wrapper.style.padding = "10px";
+          wrapper.style.textAlign = "center";
+          wrapper.style.display = "block";
+          wrapper.style.margin = "10px 0";
+          wrapper.title = `Double-click to edit ${file.name}`;
+          wrapper.innerHTML = `<span class="color-text-muted">Loading preview...</span>`;
+          embed.appendChild(wrapper);
+          const fileData = await this.app.vault.read(file);
+          const format = file.extension.toLowerCase();
+          const previewEl = await this.renderMoleculeToPreview(fileData, format);
+          if (!wrapper.isConnected) return;
+          wrapper.innerHTML = "";
+          if (previewEl) {
+            wrapper.appendChild(previewEl);
+          } else {
+            wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b><br><span class="color-text-muted">Double-click to open Ketcher</span></div>`;
+          }
+          wrapper.addEventListener("dblclick", async (e) => {
+            e.stopPropagation();
+            const freshData = await this.app.vault.read(file);
+            new KetcherModal(this, freshData, format, async (newData) => {
+              await this.app.vault.modify(file, newData);
+              wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
+              const updatedEl = await this.renderMoleculeToPreview(newData, format);
+              if (updatedEl && wrapper.isConnected) {
+                wrapper.innerHTML = "";
+                wrapper.appendChild(updatedEl);
+              }
+            }).open();
+          });
+        }
+      });
+    });
+    const fileCodeblockProcessor = async (source, el, ctx) => {
+      const match = source.match(/\[\[(.*?)\]\]/);
+      if (match && match[1]) {
+        const link = match[1];
+        const file = this.app.metadataCache.getFirstLinkpathDest(link, ctx.sourcePath);
+        if (file && file instanceof import_obsidian.TFile) {
+          const format = file.extension.toLowerCase();
+          const wrapper = el.createDiv();
+          wrapper.style.textAlign = "center";
+          wrapper.style.border = "1px solid var(--background-modifier-border)";
+          wrapper.style.borderRadius = "5px";
+          wrapper.style.padding = "10px";
+          wrapper.style.cursor = "pointer";
+          wrapper.title = `Double-click to edit ${file.name}`;
+          wrapper.innerHTML = `<span class="color-text-muted">Loading preview...</span>`;
+          const data = await this.app.vault.read(file);
+          const previewEl = await this.renderMoleculeToPreview(data, format);
+          if (!wrapper.isConnected) return;
+          wrapper.empty();
+          if (previewEl) {
+            wrapper.appendChild(previewEl);
+          } else {
+            wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b><br><span class="color-text-muted">Double-click to open Ketcher</span></div>`;
+          }
+          wrapper.addEventListener("dblclick", async (e) => {
+            e.stopPropagation();
+            const freshData = await this.app.vault.read(file);
+            new KetcherModal(this, freshData, format, async (newData) => {
+              await this.app.vault.modify(file, newData);
+              wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
+              const updatedEl = await this.renderMoleculeToPreview(newData, format);
+              if (updatedEl && wrapper.isConnected) {
+                wrapper.empty();
+                wrapper.appendChild(updatedEl);
+              }
+            }).open();
+          });
+          return;
+        }
+      }
+      el.createDiv({ text: "Please use the format: [[filename.mol]]", cls: "color-red" });
+    };
+    this.registerMarkdownCodeBlockProcessor("mol", fileCodeblockProcessor);
+    this.registerMarkdownCodeBlockProcessor("cdxml", fileCodeblockProcessor);
+    this.registerMarkdownCodeBlockProcessor("smiles", (source, el) => {
       const cleanSmiles = source.trim();
       const wrapper = document.createElement("div");
       wrapper.style.cursor = "pointer";
       wrapper.title = "Double-click to edit structure";
       el.appendChild(wrapper);
       const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
-      const drawerOptions = {
-        width: this.settings.width,
-        height: this.settings.height
-      };
+      const drawerOptions = { width: this.settings.width, height: this.settings.height };
       try {
         const Smi = Yr;
         if (cleanSmiles.includes(">")) {
@@ -4806,8 +4901,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
             cleanSmiles,
             (tree) => {
               const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
-              const svg = rxnDrawer.draw(tree, "svg", theme);
-              wrapper.appendChild(svg);
+              wrapper.appendChild(rxnDrawer.draw(tree, "svg", theme));
             },
             (err) => el.createDiv({ text: `Reaction Error: ${err}`, cls: "color-red" })
           );
@@ -4829,25 +4923,19 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       wrapper.addEventListener("dblclick", () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (!view) return;
-        const info = ctx.getSectionInfo(el);
-        if (!info) return;
-        new KetcherModal(this, cleanSmiles, (newSmiles) => {
+        new KetcherModal(this, cleanSmiles, "smiles", (newData) => {
           const editor = view.editor;
-          editor.replaceRange(
-            newSmiles + "\n",
-            { line: info.lineStart + 1, ch: 0 },
-            { line: info.lineEnd, ch: 0 }
-          );
+          const content = editor.getValue();
+          const updatedContent = content.replace(source, newData + "\n");
+          editor.setValue(updatedContent);
         }).open();
       });
     });
   }
   onunload() {
-    if (this.server) {
-      this.server.close();
-      console.log("ChemEdit: Ketcher proxy server shut down.");
-    }
-    this.assetCache.clear();
+    if (this.server) this.server.close();
+    if (this.hiddenIframe) this.hiddenIframe.remove();
+    this.renderTimeouts.forEach((t) => clearTimeout(t));
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -4861,7 +4949,7 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("Please open a Markdown file first to insert a drawing.");
       return;
     }
-    new KetcherModal(this, "", (newSmiles) => {
+    new KetcherModal(this, "", "smiles", (newSmiles) => {
       this.insertSmilesAtCursor(view.editor, newSmiles);
     }).open();
   }
@@ -4874,89 +4962,344 @@ ${smiles}
     editor.replaceRange(textToInsert, cursor);
     editor.setCursor({ line: cursor.line + 3, ch: 0 });
   }
+  async renderMoleculeToPreview(data, format) {
+    return new Promise((resolve) => {
+      const id = Math.random().toString(36).substring(7);
+      this.renderQueue.set(id, resolve);
+      this.headlessQueue.push({ id, data, format, resolve });
+      this.processHeadlessQueue();
+    });
+  }
+  processHeadlessQueue() {
+    if (this.isProcessingHeadless || !this.isHeadlessReady || this.headlessQueue.length === 0) return;
+    this.isProcessingHeadless = true;
+    const task = this.headlessQueue.shift();
+    const timeoutId = setTimeout(() => {
+      console.warn(`ChemEdit: Ketcher timed out rendering ${task.id}. Skipping to next.`);
+      const resolver = this.renderQueue.get(task.id);
+      if (resolver) {
+        resolver(null);
+        this.renderQueue.delete(task.id);
+      }
+      this.isProcessingHeadless = false;
+      this.processHeadlessQueue();
+    }, 3e3);
+    this.renderTimeouts.set(task.id, timeoutId);
+    this.hiddenIframe.contentWindow?.postMessage({
+      type: "renderPreview",
+      id: task.id,
+      data: task.data,
+      format: task.format
+    }, "*");
+  }
+  setupHeadlessRenderer() {
+    this.hiddenIframe = document.createElement("iframe");
+    this.hiddenIframe.src = `http://127.0.0.1:${this.port}/?t=${Date.now()}`;
+    this.hiddenIframe.style.position = "absolute";
+    this.hiddenIframe.style.visibility = "hidden";
+    this.hiddenIframe.style.pointerEvents = "none";
+    this.hiddenIframe.style.width = "800px";
+    this.hiddenIframe.style.height = "600px";
+    document.body.appendChild(this.hiddenIframe);
+    window.addEventListener("message", (event) => {
+      if (!event.data) return;
+      if (event.data.type === "headlessReady") {
+        this.isHeadlessReady = true;
+        this.processHeadlessQueue();
+      } else if (event.data.type === "previewSuccess") {
+        const timeoutId = this.renderTimeouts.get(event.data.id);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          this.renderTimeouts.delete(event.data.id);
+        }
+        const resolver = this.renderQueue.get(event.data.id);
+        if (resolver) {
+          if (event.data.smiles) {
+            try {
+              const Smi = Yr;
+              const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
+              const drawerOptions = { width: this.settings.width, height: this.settings.height };
+              if (event.data.smiles.includes(">")) {
+                const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
+                Smi.parseReaction(event.data.smiles, (tree) => {
+                  resolver(rxnDrawer.draw(tree, "svg", theme));
+                });
+              } else {
+                const canvas = document.createElement("canvas");
+                Smi.parse(event.data.smiles, (tree) => {
+                  const drawer = new Smi.Drawer(drawerOptions);
+                  drawer.draw(tree, canvas, theme);
+                  resolver(canvas);
+                });
+              }
+            } catch (e) {
+              resolver(null);
+            }
+          } else if (event.data.svgUrl) {
+            const img = document.createElement("img");
+            img.src = event.data.svgUrl;
+            img.style.maxWidth = "100%";
+            img.style.maxHeight = "400px";
+            resolver(img);
+          } else {
+            resolver(null);
+          }
+          this.renderQueue.delete(event.data.id);
+        }
+        this.isProcessingHeadless = false;
+        this.processHeadlessQueue();
+      }
+    });
+  }
+  getKetcherDir() {
+    const basePath = this.app.vault.adapter.getBasePath();
+    let baseDir = path.join(basePath, this.manifest.dir, "ketcher");
+    if (!fs.existsSync(path.join(baseDir, "index.html")) && fs.existsSync(path.join(baseDir, "standalone", "index.html"))) {
+      baseDir = path.join(baseDir, "standalone");
+    }
+    return baseDir;
+  }
   startKetcherServer() {
     this.server = http.createServer(async (req, res) => {
       try {
-        const urlPath = req.url;
-        if (urlPath === "/" || urlPath === "/index.html" || urlPath.startsWith("/?")) {
-          const response = await (0, import_obsidian.requestUrl)({
-            url: "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html",
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-          });
-          let html = response.text;
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", async () => {
+          const urlPath = req.url;
+          let cleanPath = urlPath.split("?")[0];
+          if (cleanPath.startsWith("/KetcherDemoSA")) {
+            cleanPath = cleanPath.substring("/KetcherDemoSA".length);
+          }
+          if (cleanPath === "" || cleanPath === "/") cleanPath = "/index.html";
+          const ketcherDir = this.getKetcherDir();
+          const localFilePath = path.join(ketcherDir, cleanPath);
+          const isApiCall = cleanPath.startsWith("/v2/");
+          const isOfflineMode = !isApiCall && fs.existsSync(localFilePath) && fs.statSync(localFilePath).isFile();
           const bridgeScript = `
                     <script>
                         window.addEventListener('message', function(event) {
                             if (!event.data) return;
-                            if (event.data.type === 'setSmiles') {
+                            if (event.data.type === 'setMolecule') {
                                 var check = setInterval(function() {
                                     if (window.ketcher) {
-                                        window.ketcher.setMolecule(event.data.smiles);
+                                        window.ketcher.setMolecule(event.data.data);
                                         clearInterval(check);
                                     }
                                 }, 200);
-                            } else if (event.data.type === 'getSmiles') {
+                            } else if (event.data.type === 'getMolecule') {
                                 if (window.ketcher) {
-                                    window.ketcher.getSmiles().then(function(smiles) {
-                                        window.parent.postMessage({ type: 'saveSmiles', smiles: smiles }, '*');
-                                    });
+                                    var format = event.data.format;
+                                    var safeFallbackToMol = function() {
+                                        window.ketcher.getMolfile().then(function(res) { window.parent.postMessage({ type: 'saveMolecule', data: res }, '*'); });
+                                    };
+
+                                    if (format === 'smiles') {
+                                        window.ketcher.getSmiles().then(function(res) { window.parent.postMessage({ type: 'saveMolecule', data: res }, '*'); });
+                                    } else if (format === 'cdxml') {
+                                        if (typeof window.ketcher.getCDXml === 'function') {
+                                            window.ketcher.getCDXml().then(function(res) { window.parent.postMessage({ type: 'saveMolecule', data: res }, '*'); }).catch(safeFallbackToMol);
+                                        } else if (typeof window.ketcher.getCdxml === 'function') {
+                                            window.ketcher.getCdxml().then(function(res) { window.parent.postMessage({ type: 'saveMolecule', data: res }, '*'); }).catch(safeFallbackToMol);
+                                        } else {
+                                            safeFallbackToMol();
+                                        }
+                                    } else {
+                                        safeFallbackToMol();
+                                    }
                                 }
+                            } else if (event.data.type === 'renderPreview') {
+                                var fallbackToSmiles = function() {
+                                    var p = window.ketcher.setMolecule(event.data.data);
+                                    Promise.resolve(p).then(function() {
+                                        return window.ketcher.getSmiles();
+                                    }).then(function(smiles) {
+                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, smiles: smiles }, '*');
+                                    }).catch(function() {
+                                        window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: null }, '*');
+                                    });
+                                };
+
+                                var attemptSVG = function() {
+                                    if (!window.ketcher) {
+                                        setTimeout(attemptSVG, 200);
+                                        return;
+                                    }
+                                    if (window.ketcher.generateImage) {
+                                        window.ketcher.generateImage(event.data.data, { outputFormat: 'svg', backgroundColor: 'transparent' })
+                                            .then(function(blob) {
+                                                var reader = new FileReader();
+                                                reader.onload = function() { window.parent.postMessage({ type: 'previewSuccess', id: event.data.id, svgUrl: reader.result }, '*'); };
+                                                reader.readAsDataURL(blob);
+                                            })
+                                            .catch(function(err) {
+                                                fallbackToSmiles();
+                                            });
+                                    } else {
+                                        fallbackToSmiles();
+                                    }
+                                };
+                                attemptSVG();
                             }
                         });
+                        var checkReady = setInterval(function() {
+                            if (window.ketcher) {
+                                clearInterval(checkReady);
+                                window.parent.postMessage({ type: 'headlessReady' }, '*');
+                            }
+                        }, 200);
                     </script>`;
-          html = html.replace("<head>", "<head>\n" + bridgeScript);
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(html, "utf-8");
-          return;
-        }
-        const cleanPath = urlPath.split("?")[0];
-        const targetUrl = cleanPath.startsWith("/KetcherDemoSA") ? "https://lifescience.opensource.epam.com" + urlPath : "https://lifescience.opensource.epam.com/KetcherDemoSA" + (urlPath.startsWith("/") ? "" : "/") + urlPath;
-        if (this.assetCache.has(targetUrl)) {
-          const cached = this.assetCache.get(targetUrl);
-          res.writeHead(200, {
-            "Content-Type": cached.type,
-            "Access-Control-Allow-Origin": "*"
-          });
-          res.end(Buffer.from(cached.data));
-          return;
-        }
-        const assetRes = await (0, import_obsidian.requestUrl)({
-          url: targetUrl,
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "*/*" }
+          if (isOfflineMode) {
+            const ext = path.extname(localFilePath);
+            let mime = "application/octet-stream";
+            if (ext === ".html") mime = "text/html";
+            else if (ext === ".js") mime = "application/javascript";
+            else if (ext === ".css") mime = "text/css";
+            else if (ext === ".svg") mime = "image/svg+xml";
+            else if (ext === ".wasm") mime = "application/wasm";
+            else if (ext === ".json") mime = "application/json";
+            const content = fs.readFileSync(localFilePath);
+            if (cleanPath === "/index.html") {
+              let html = content.toString("utf-8");
+              html = html.replace("<head>", "<head>\n" + bridgeScript);
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(html);
+            } else {
+              res.writeHead(200, { "Content-Type": mime, "Access-Control-Allow-Origin": "*" });
+              res.end(content);
+            }
+            return;
+          }
+          let targetUrl = isApiCall ? "https://lifescience.opensource.epam.com" + cleanPath : "https://lifescience.opensource.epam.com/KetcherDemoSA" + cleanPath;
+          if (req.method === "GET" && this.assetCache.has(targetUrl)) {
+            const cached = this.assetCache.get(targetUrl);
+            res.writeHead(200, { "Content-Type": cached.type, "Access-Control-Allow-Origin": "*" });
+            res.end(Buffer.from(cached.data));
+            return;
+          }
+          const bodyBuffer = Buffer.concat(chunks);
+          const reqOptions = {
+            url: targetUrl,
+            method: req.method,
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0.0.0 Safari/537.36",
+              "Accept": "*/*",
+              "Origin": "https://lifescience.opensource.epam.com",
+              "Referer": "https://lifescience.opensource.epam.com/KetcherDemoSA/index.html"
+            }
+          };
+          if (req.headers["content-type"]) reqOptions.headers["Content-Type"] = req.headers["content-type"];
+          if (req.method !== "GET" && req.method !== "HEAD" && bodyBuffer.length > 0) {
+            reqOptions.body = bodyBuffer.buffer.slice(bodyBuffer.byteOffset, bodyBuffer.byteOffset + bodyBuffer.byteLength);
+          }
+          try {
+            const assetRes = await (0, import_obsidian.requestUrl)(reqOptions);
+            if (cleanPath === "/index.html") {
+              if (assetRes.status >= 400) throw new Error(`HTTP ${assetRes.status}`);
+              let html = assetRes.text;
+              html = html.replace("<head>", "<head>\n" + bridgeScript);
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(html);
+              return;
+            }
+            let contentType = assetRes.headers["content-type"] || "application/octet-stream";
+            if (cleanPath.endsWith(".js")) contentType = "application/javascript";
+            else if (cleanPath.endsWith(".css")) contentType = "text/css";
+            else if (cleanPath.endsWith(".wasm")) contentType = "application/wasm";
+            else if (cleanPath.endsWith(".svg")) contentType = "image/svg+xml";
+            else if (cleanPath.endsWith(".json")) contentType = "application/json";
+            if (req.method === "GET" && assetRes.status === 200) {
+              this.assetCache.set(targetUrl, { type: contentType, data: assetRes.arrayBuffer });
+            }
+            res.writeHead(assetRes.status || 200, { "Content-Type": contentType, "Access-Control-Allow-Origin": "*" });
+            res.end(Buffer.from(assetRes.arrayBuffer));
+          } catch (e) {
+            if (cleanPath === "/index.html") {
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(`<div style="color:red; font-family: sans-serif; padding: 20px;">
+                                <h2>Failed to load Ketcher Online</h2>
+                                <p>Ensure you have an internet connection, or install the Offline Mode files.</p>
+                                <p><i>Error: ${e.message || "404 Not Found"}</i></p>
+                            </div>`);
+            } else {
+              res.writeHead(e.status || 404, { "Access-Control-Allow-Origin": "*" });
+              res.end();
+            }
+          }
         });
-        let contentType = "application/octet-stream";
-        if (cleanPath.endsWith(".js")) contentType = "application/javascript";
-        else if (cleanPath.endsWith(".css")) contentType = "text/css";
-        else if (cleanPath.endsWith(".svg")) contentType = "image/svg+xml";
-        else if (cleanPath.endsWith(".woff2")) contentType = "font/woff2";
-        else if (cleanPath.endsWith(".png")) contentType = "image/png";
-        else if (cleanPath.endsWith(".json")) contentType = "application/json";
-        else if (assetRes.headers["content-type"]) contentType = assetRes.headers["content-type"];
-        this.assetCache.set(targetUrl, { type: contentType, data: assetRes.arrayBuffer });
-        res.writeHead(assetRes.status || 200, {
-          "Content-Type": contentType,
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end(Buffer.from(assetRes.arrayBuffer));
       } catch (e) {
-        res.writeHead(500);
+        res.writeHead(500, { "Access-Control-Allow-Origin": "*" });
         res.end();
       }
     });
     this.server.listen(0, "127.0.0.1", () => {
       this.port = (this.server?.address()).port;
+      this.setupHeadlessRenderer();
     });
+  }
+};
+var ChemFileView = class extends import_obsidian.TextFileView {
+  plugin;
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return "chem-file-view";
+  }
+  getDisplayText() {
+    return this.file ? this.file.name : "Molecule View";
+  }
+  getIcon() {
+    return "hexagon";
+  }
+  getViewData() {
+    return this.data;
+  }
+  async setViewData(data, clear) {
+    this.data = data;
+    const container = this.contentEl;
+    container.empty();
+    const wrapper = container.createDiv();
+    wrapper.style.display = "flex";
+    wrapper.style.alignItems = "center";
+    wrapper.style.justifyContent = "center";
+    wrapper.style.width = "100%";
+    wrapper.style.height = "100%";
+    wrapper.style.cursor = "pointer";
+    wrapper.title = "Double-click to edit";
+    wrapper.innerHTML = `<div class="color-text-muted">Loading preview...</div>`;
+    const format = this.file?.extension === "cdxml" ? "cdxml" : "mol";
+    const previewEl = await this.plugin.renderMoleculeToPreview(data, format);
+    wrapper.empty();
+    if (previewEl) {
+      wrapper.appendChild(previewEl);
+    } else {
+      wrapper.innerHTML = `<div class="color-text-muted">Error. Double-click to open editor.</div>`;
+    }
+    wrapper.ondblclick = () => {
+      new KetcherModal(this.plugin, this.data, format, async (newData) => {
+        this.data = newData;
+        this.requestSave();
+        this.setViewData(newData, false);
+      }).open();
+    };
+  }
+  clear() {
+    this.data = "";
+    this.contentEl.empty();
   }
 };
 var KetcherModal = class extends import_obsidian.Modal {
   plugin;
-  initialSmiles;
+  initialData;
+  format;
   onSave;
   messageListener;
-  constructor(plugin, initialSmiles, onSave) {
+  constructor(plugin, initialData, format, onSave) {
     super(plugin.app);
     this.plugin = plugin;
-    this.initialSmiles = initialSmiles;
+    this.initialData = initialData;
+    this.format = format;
     this.onSave = onSave;
   }
   onOpen() {
@@ -4965,20 +5308,20 @@ var KetcherModal = class extends import_obsidian.Modal {
     this.modalEl.style.width = "85vw";
     this.modalEl.style.height = "85vh";
     const iframe = document.createElement("iframe");
-    iframe.src = `http://127.0.0.1:${this.plugin.port}/`;
+    iframe.src = `http://127.0.0.1:${this.plugin.port}/?t=${Date.now()}`;
     iframe.style.width = "100%";
     iframe.style.height = "calc(100% - 50px)";
     iframe.style.border = "none";
     iframe.style.backgroundColor = "white";
     contentEl.appendChild(iframe);
     iframe.onload = () => {
-      if (this.initialSmiles && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: "setSmiles", smiles: this.initialSmiles }, "*");
+      if (this.initialData && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: "setMolecule", data: this.initialData }, "*");
       }
     };
     this.messageListener = (event) => {
-      if (event.data && event.data.type === "saveSmiles") {
-        this.onSave(event.data.smiles);
+      if (event.data && event.data.type === "saveMolecule") {
+        this.onSave(event.data.data);
         this.close();
       }
     };
@@ -4992,7 +5335,7 @@ var KetcherModal = class extends import_obsidian.Modal {
     const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
     saveBtn.onclick = () => {
       if (iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: "getSmiles" }, "*");
+        iframe.contentWindow.postMessage({ type: "getMolecule", format: this.format }, "*");
       }
     };
     cancelBtn.onclick = () => this.close();
@@ -5012,11 +5355,29 @@ var ChemEditSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "ChemEdit Settings" });
-    new import_obsidian.Setting(containerEl).setName("Image Width").setDesc("Set the width of the rendered structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.width.toString()).onChange(async (value) => {
+    const ketcherDir = this.plugin.getKetcherDir();
+    const isOffline = fs.existsSync(path.join(ketcherDir, "index.html"));
+    containerEl.createEl("h3", { text: "Offline Mode Status" });
+    const statusEl = containerEl.createEl("div", { cls: "setting-item-description" });
+    if (isOffline) {
+      statusEl.innerHTML = `<span style="color:var(--text-success); font-size:1.2em">\u2705 <b>Offline Mode Active</b></span><br>Local Ketcher installation detected. Your molecules are rendering rapidly, entirely offline and securely!`;
+    } else {
+      statusEl.innerHTML = `<span style="color:var(--text-warning); font-size:1.2em">\u26A0\uFE0F <b>Online Mode</b></span><br>Ketcher is currently streaming from EPAM Servers.<br><br>
+            <div style="background:var(--background-secondary); border:1px solid var(--background-modifier-border); padding: 15px; border-radius: 5px; margin-top: 10px; color: var(--text-normal)">
+                <b>To enable lightning-fast Offline Mode:</b><br><br>
+                1. Download <a href="https://github.com/epam/ketcher/releases/download/v2.28.0/ketcher-standalone-2.28.0.zip" target="_blank"><b>ketcher-standalone.zip</b></a>.<br>
+                2. Extract the folder into your Obsidian Vault plugins folder so it looks like this:<br>
+                <code style="display:block; margin: 10px 0; padding: 10px; background: var(--background-primary); border-radius: 4px;">.../.obsidian/plugins/chemedit/ketcher/index.html</code>
+                <i>(Note: If it extracts as a folder named 'standalone', you can just drop that whole folder into the 'ketcher' folder. The plugin will auto-detect it!)</i><br><br>
+                3. Restart Obsidian.
+            </div>`;
+    }
+    containerEl.createEl("br");
+    new import_obsidian.Setting(containerEl).setName("Image Width").setDesc("Set the width of the rendered SMILES structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.width.toString()).onChange(async (value) => {
       this.plugin.settings.width = parseInt(value) || 300;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Image Height").setDesc("Set the height of the rendered structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.height.toString()).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Image Height").setDesc("Set the height of the rendered SMILES structure (in pixels)").addText((text) => text.setPlaceholder("300").setValue(this.plugin.settings.height.toString()).onChange(async (value) => {
       this.plugin.settings.height = parseInt(value) || 300;
       await this.plugin.saveSettings();
     }));
@@ -5029,11 +5390,11 @@ var ChemEditSettingTab = class extends import_obsidian.PluginSettingTab {
       "matrix": "Matrix",
       "cyberpunk": "Cyberpunk"
     };
-    new import_obsidian.Setting(containerEl).setName("Light Theme").setDesc("Color theme used when Obsidian is in Light Mode").addDropdown((dropdown) => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.lightTheme).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Light Theme").addDropdown((dropdown) => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.lightTheme).onChange(async (value) => {
       this.plugin.settings.lightTheme = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Dark Theme").setDesc("Color theme used when Obsidian is in Dark Mode").addDropdown((dropdown) => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.darkTheme).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Dark Theme").addDropdown((dropdown) => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.darkTheme).onChange(async (value) => {
       this.plugin.settings.darkTheme = value;
       await this.plugin.saveSettings();
     }));
