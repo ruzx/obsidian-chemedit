@@ -4768,7 +4768,9 @@ var DEFAULT_SETTINGS = {
   lightTheme: "light",
   darkTheme: "dark",
   inlineSmilesPrefix: "$smiles=",
-  inlineMolPrefix: "$mol="
+  inlineMolPrefix: "$mol=",
+  smartPasteSmiles: true,
+  smartPasteMol: true
 };
 var ChemEditPlugin = class extends import_obsidian.Plugin {
   server = null;
@@ -4799,7 +4801,19 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
         }).open();
       }
     });
-    this.registerMarkdownPostProcessor(async (el, ctx) => {
+    this.addCommand({
+      id: "insert-inline-molecule",
+      name: "Draw new inline molecule",
+      editorCallback: (editor) => {
+        new KetcherModal(this, "", "smiles", (newData) => {
+          const cursor = editor.getCursor();
+          const textToInsert = `${this.settings.inlineSmilesPrefix}${newData} `;
+          editor.replaceRange(textToInsert, cursor);
+          editor.setCursor({ line: cursor.line, ch: cursor.ch + textToInsert.length });
+        }).open();
+      }
+    });
+    this.registerMarkdownPostProcessor(async (el, ctx2) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       const nodes = [];
       let node;
@@ -4807,18 +4821,70 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       for (const n of nodes) {
         const text = n.nodeValue || "";
         if (this.settings.inlineSmilesPrefix && text.includes(this.settings.inlineSmilesPrefix)) {
-          this.processInlineString(n, text, this.settings.inlineSmilesPrefix, "smiles", ctx.sourcePath);
+          this.processInlineString(n, text, this.settings.inlineSmilesPrefix, "smiles", ctx2.sourcePath);
         } else if (this.settings.inlineMolPrefix && text.includes(this.settings.inlineMolPrefix)) {
-          this.processInlineString(n, text, this.settings.inlineMolPrefix, "file", ctx.sourcePath);
+          this.processInlineString(n, text, this.settings.inlineMolPrefix, "file", ctx2.sourcePath);
         }
       }
     });
-    this.registerMarkdownPostProcessor(async (el, ctx) => {
+    this.registerEvent(
+      this.app.workspace.on("editor-paste", (evt, editor) => {
+        const text = evt.clipboardData?.getData("text/plain");
+        if (!text) return;
+        const cleanText = text.trim();
+        if (this.settings.smartPasteMol && (cleanText.includes("V2000") || cleanText.includes("V3000"))) {
+          evt.preventDefault();
+          const cursor = editor.getCursor();
+          editor.replaceRange(`\`\`\`mol
+${cleanText}
+\`\`\`
+`, cursor);
+          return;
+        }
+        const smilesRegex = /^([BCNOPSFIcbcnops@+\-\[\]\(\)\\\/=#%0-9]{4,})$/;
+        if (this.settings.smartPasteSmiles && smilesRegex.test(cleanText) && /[CNOcno]/.test(cleanText)) {
+          evt.preventDefault();
+          const cursor = editor.getCursor();
+          editor.replaceRange(`\`\`\`smiles
+${cleanText}
+\`\`\`
+`, cursor);
+        }
+      })
+    );
+    this.addCommand({
+      id: "edit-inline-molecule-at-cursor",
+      name: "Edit inline molecule under cursor",
+      editorCallback: (editor) => {
+        const cursor = editor.getCursor();
+        const lineText = editor.getLine(cursor.line);
+        const prefix = this.settings.inlineSmilesPrefix;
+        const startIndex = lineText.lastIndexOf(prefix, cursor.ch);
+        if (startIndex !== -1) {
+          const searchArea = lineText.substring(startIndex + prefix.length);
+          const match = searchArea.match(/[\s`'"]/);
+          const endIndex = match ? startIndex + prefix.length + match.index : lineText.length;
+          if (cursor.ch >= startIndex && cursor.ch <= endIndex) {
+            const rawData = lineText.substring(startIndex + prefix.length, endIndex).trim();
+            new KetcherModal(this, rawData, "smiles", (newData) => {
+              editor.replaceRange(
+                newData,
+                { line: cursor.line, ch: startIndex + prefix.length },
+                { line: cursor.line, ch: endIndex }
+              );
+            }).open();
+            return;
+          }
+        }
+        new import_obsidian.Notice("Place your cursor inside an inline $smiles= string first!");
+      }
+    });
+    this.registerMarkdownPostProcessor(async (el, ctx2) => {
       const embeds = el.querySelectorAll(".internal-embed");
       embeds.forEach(async (embed) => {
         const src = embed.getAttribute("src");
         if (src && (src.toLowerCase().endsWith(".mol") || src.toLowerCase().endsWith(".cdxml"))) {
-          const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx.sourcePath);
+          const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx2.sourcePath);
           if (!file || !(file instanceof import_obsidian.TFile)) return;
           embed.empty();
           const wrapper = document.createElement("div");
@@ -4858,31 +4924,238 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
         }
       });
     });
-    const fileCodeblockProcessor = async (source, el, ctx) => {
+    this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx2) => {
+      const { parseYaml } = require("obsidian");
+      const wrapper = el.createDiv();
+      wrapper.style.border = "1px solid var(--background-modifier-border)";
+      wrapper.style.padding = "25px";
+      wrapper.style.borderRadius = "12px";
+      wrapper.style.backgroundColor = "var(--background-primary)";
+      wrapper.style.boxShadow = "0 4px 12px rgba(0, 0, 0, 0.05)";
+      wrapper.style.fontFamily = "var(--font-interface)";
+      wrapper.innerHTML = `<h3 class="color-text-muted" style="text-align:center;">\u23F3 Calculating Stoichiometry...</h3>`;
+      try {
+        const data = parseYaml(source);
+        if (!data.reactants || !data.products) throw new Error("ELN block must contain 'reactants' and 'products'.");
+        const fetchChemProps = async (smiles) => {
+          try {
+            const res = await (0, import_obsidian.requestUrl)(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`);
+            const props = res.json.PropertyTable.Properties[0];
+            return { mw: parseFloat(props.MolecularWeight), formula: props.MolecularFormula };
+          } catch {
+            return { mw: 0, formula: "Unknown" };
+          }
+        };
+        for (const r of data.reactants) {
+          if (r.smiles && (!r.mw || !r.formula)) {
+            const props = await fetchChemProps(r.smiles);
+            r.mw = r.mw || props.mw;
+            r.formula = r.formula || props.formula;
+          }
+        }
+        for (const p of data.products) {
+          if (p.smiles && (!p.mw || !p.formula)) {
+            const props = await fetchChemProps(p.smiles);
+            p.mw = p.mw || props.mw;
+            p.formula = p.formula || props.formula;
+          }
+        }
+        let refMmol = data.reference_amount || 0;
+        if (refMmol === 0) {
+          const baseR = data.reactants.find((r) => r.eq === 1 && r.mass);
+          if (baseR && baseR.mw) refMmol = baseR.mass / baseR.mw;
+        }
+        data.reactants.forEach((r) => {
+          r.eq = r.eq || 1;
+          r.mmol = r.mmol || refMmol * r.eq;
+          if (!r.mass && r.mw) r.mass = r.mmol * r.mw;
+          if (r.mass && r.density) r.volume = r.mass / 1e3 / r.density;
+        });
+        data.products.forEach((p) => {
+          p.eq = p.eq || 1;
+          p.theory_mmol = refMmol * p.eq;
+          p.theory_mass = p.theory_mmol * p.mw;
+          if (p.mass_isolated) {
+            p.yield = (p.mass_isolated / p.theory_mass * 100).toFixed(1);
+            p.mmol_isolated = p.mass_isolated / p.mw;
+          }
+        });
+        const isDark = document.body.hasClass("theme-dark");
+        const theme = isDark ? this.settings.darkTheme : this.settings.lightTheme;
+        const thColor = "var(--background-secondary-alt)";
+        const bdColor = "var(--background-modifier-border-hover)";
+        const textColor = "var(--text-normal)";
+        let html = `<div style="font-size: 14px; color: ${textColor};">`;
+        html += `
+                <div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid var(--background-modifier-border); padding-bottom: 10px; margin-bottom: 20px;">
+                    <h2 style="margin: 0; font-size: 22px; font-weight: 700; color: var(--text-normal);">${data.code || data.id || "Reaction Scheme"}</h2>
+                    <div style="font-size: 12px; color: var(--text-muted);">
+                        ${data.date ? `<b>Created:</b> ${data.date} &nbsp;|&nbsp; ` : ""}
+                        ${data.author ? `<b>Author:</b> ${data.author}` : ""}
+                    </div>
+                </div>`;
+        html += `<div style="display: flex; align-items: center; justify-content: center; flex-wrap: wrap; padding: 15px; margin-bottom: 20px; background: var(--background-secondary); border-radius: 8px; border: 1px solid var(--background-modifier-border);">`;
+        data.reactants.forEach((r, i) => {
+          if (i > 0) html += `<div style="font-size: 20px; font-weight: bold; color: var(--text-muted); margin: 0 10px;">+</div>`;
+          html += `<div style="display: flex; flex-direction: column; align-items: center; margin: 0 5px;">
+                        <canvas id="scheme_r_${i}" width="110" height="110"></canvas>
+                        <div style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">${r.eq || 1} eq</div>
+                    </div>`;
+        });
+        html += `<div style="display: flex; flex-direction: column; align-items: center; margin: 0 20px;">
+                    <div style="font-size: 11px; color: var(--text-muted); text-align: center; font-weight: 500;">${data.temperature || ""}</div>
+                    <div style="font-size: 11px; color: var(--text-muted); text-align: center; font-weight: 500;">${data.duration || ""}</div>
+                    <div style="font-size: 28px; font-weight: bold; line-height: 0.8; color: var(--text-normal); margin: 4px 0;">\u27F6</div>
+                    <div style="font-size: 11px; color: var(--text-muted); text-align: center; font-weight: 500;">${data.solvent || ""}</div>
+                </div>`;
+        data.products.forEach((p, i) => {
+          if (i > 0) html += `<div style="font-size: 20px; font-weight: bold; color: var(--text-muted); margin: 0 10px;">+</div>`;
+          html += `<div style="display: flex; flex-direction: column; align-items: center; margin: 0 5px;">
+                        <canvas id="scheme_p_${i}" width="110" height="110"></canvas>
+                        <div style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">${p.eq || 1} eq</div>
+                    </div>`;
+        });
+        html += `</div>`;
+        html += `
+                <div style="display: flex; justify-content: flex-start; gap: 30px; background: var(--background-secondary-alt); padding: 10px 15px; border-radius: 6px; margin-bottom: 25px; font-size: 13px;">
+                    <div><b style="color:var(--text-muted);">Duration:</b> ${data.duration || "-"}</div>
+                    <div><b style="color:var(--text-muted);">Solvent:</b> ${data.solvent || "-"}</div>
+                    <div><b style="color:var(--text-muted);">Temperature:</b> ${data.temperature || "-"}</div>
+                    ${data.atmosphere ? `<div><b style="color:var(--text-muted);">Atmosphere:</b> ${data.atmosphere}</div>` : ""}
+                </div>`;
+        html += `
+                    <h4 style="margin-bottom: 10px; margin-top: 0; color: var(--text-normal);">Reactants</h4>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; text-align: left; font-size: 13px;">
+                        <tr style="background-color: ${thColor}; border-bottom: 2px solid var(--background-modifier-border);">
+                            <th style="padding: 10px;">eq</th>
+                            <th style="padding: 10px;">Structure</th>
+                            <th style="padding: 10px;">Name</th>
+                            <th style="padding: 10px;">Formula</th>
+                            <th style="padding: 10px;">MW</th>
+                            <th style="padding: 10px;">n [mmol]</th>
+                            <th style="padding: 10px;">m [mg]</th>
+                            <th style="padding: 10px;">V [ml]</th>
+                        </tr>`;
+        data.reactants.forEach((r, i) => {
+          html += `<tr style="border-bottom: 1px solid ${bdColor};">
+                        <td style="padding: 10px; font-weight:500;">${r.eq}</td>
+                        <td style="padding: 10px;"><canvas id="table_r_${i}" width="90" height="90"></canvas></td>
+                        <td style="padding: 10px;"><b>${r.name || "-"}</b></td>
+                        <td style="padding: 10px; color:var(--text-muted);">${r.formula || "-"}</td>
+                        <td style="padding: 10px; color:var(--text-muted);">${r.mw ? r.mw.toFixed(2) : "-"}</td>
+                        <td style="padding: 10px;">${r.mmol ? r.mmol.toFixed(2) : "-"}</td>
+                        <td style="padding: 10px;">${r.mass ? r.mass.toFixed(1) : "-"}</td>
+                        <td style="padding: 10px;">${r.volume ? r.volume.toFixed(3) : "-"}</td>
+                    </tr>`;
+        });
+        html += `</table><h4 style="margin-bottom: 10px; color: var(--text-normal);">Products</h4>
+                    <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; margin-bottom: 20px;">
+                        <tr style="background-color: ${thColor}; border-bottom: 2px solid var(--background-modifier-border);">
+                            <th style="padding: 10px;">eq</th>
+                            <th style="padding: 10px;">Structure</th>
+                            <th style="padding: 10px;">Name</th>
+                            <th style="padding: 10px;">MW</th>
+                            <th style="padding: 10px;">n [mmol]</th>
+                            <th style="padding: 10px;">m [mg]</th>
+                            <th style="padding: 10px;">Yield [%]</th>
+                        </tr>`;
+        data.products.forEach((p, i) => {
+          html += `<tr style="border-bottom: 1px solid ${bdColor};">
+                        <td style="padding: 10px; font-weight:500;">${p.eq}</td>
+                        <td style="padding: 10px;"><canvas id="table_p_${i}" width="90" height="90"></canvas></td>
+                        <td style="padding: 10px;"><b>${p.name || "-"}</b></td>
+                        <td style="padding: 10px; color:var(--text-muted);">${p.mw ? p.mw.toFixed(2) : "-"}</td>
+                        <td style="padding: 10px;">${p.mmol_isolated ? p.mmol_isolated.toFixed(2) : p.theory_mmol.toFixed(2)}</td>
+                        <td style="padding: 10px;">${p.mass_isolated ? p.mass_isolated.toFixed(1) : "-"}</td>
+                        <td style="padding: 10px; font-size: 14px; color: var(--text-success);"><b>${p.yield ? p.yield + "%" : "-"}</b></td>
+                    </tr>`;
+        });
+        html += `</table>`;
+        if (data.procedure || data.notes) {
+          html += `
+                    <div style="margin-top: 20px; padding: 15px; background: var(--background-secondary); border-radius: 8px; border-left: 4px solid var(--interactive-accent);">
+                        <b style="color: var(--text-normal); display: block; margin-bottom: 5px;">Procedure / Notes:</b>
+                        <div style="color: var(--text-muted); white-space: pre-wrap; font-size: 13px;">${data.procedure || data.notes}</div>
+                    </div>`;
+        }
+        html += `</div>`;
+        wrapper.innerHTML = html;
+        const Smi = Yr;
+        const schemeOptions = { width: 110, height: 110, compactDrawing: false };
+        const tableOptions = { width: 90, height: 90, compactDrawing: false };
+        const attachKetcherEditor = (canvas, originalSmiles, type, index) => {
+          if (!canvas) return;
+          canvas.style.cursor = "pointer";
+          canvas.title = "Double-click to edit structure";
+          canvas.addEventListener("dblclick", async (e) => {
+            e.stopPropagation();
+            const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+            if (!view) return;
+            const info = ctx2.getSectionInfo(el);
+            new KetcherModal(this, originalSmiles, "smiles", (newData) => {
+              const editor = view.editor;
+              if (info) {
+                const { parseYaml: parseYaml2, stringifyYaml } = require("obsidian");
+                const blockText = editor.getRange({ line: info.lineStart + 1, ch: 0 }, { line: info.lineEnd, ch: 0 });
+                try {
+                  const yamlObj = parseYaml2(blockText);
+                  yamlObj[type][index].smiles = newData;
+                  delete yamlObj[type][index].mw;
+                  delete yamlObj[type][index].formula;
+                  const newYaml = stringifyYaml(yamlObj);
+                  editor.replaceRange(newYaml, { line: info.lineStart + 1, ch: 0 }, { line: info.lineEnd, ch: 0 });
+                } catch (e2) {
+                  new import_obsidian.Notice("Error updating ELN YAML block.");
+                }
+              }
+            }).open();
+          });
+        };
+        const draw = (id, smiles, opts, type, idx) => {
+          if (!smiles) return;
+          const canvas = wrapper.querySelector(id);
+          if (canvas) {
+            Smi.parse(smiles, (tree) => new Smi.Drawer(opts).draw(tree, canvas, theme));
+            attachKetcherEditor(canvas, smiles, type, idx);
+          }
+        };
+        data.reactants.forEach((r, i) => {
+          draw(`#scheme_r_${i}`, r.smiles, schemeOptions, "reactants", i);
+          draw(`#table_r_${i}`, r.smiles, tableOptions, "reactants", i);
+        });
+        data.products.forEach((p, i) => {
+          draw(`#scheme_p_${i}`, p.smiles, schemeOptions, "products", i);
+          draw(`#table_p_${i}`, p.smiles, tableOptions, "products", i);
+        });
+      } catch (err) {
+        wrapper.innerHTML = `<div style="padding: 20px; color: var(--text-error); background: var(--background-secondary); border-radius: 8px;"><b>ELN Formatting Error:</b><br>${err.message}</div>`;
+      }
+    });
+    const fileCodeblockProcessor = async (source, el, ctx2, defaultFormat) => {
+      const wrapper = el.createDiv();
+      wrapper.style.textAlign = "center";
+      wrapper.style.border = "1px solid var(--background-modifier-border)";
+      wrapper.style.borderRadius = "5px";
+      wrapper.style.padding = "10px";
+      wrapper.style.cursor = "pointer";
+      wrapper.innerHTML = `<span class="color-text-muted">Loading preview...</span>`;
       const match = source.match(/\[\[(.*?)\]\]/);
       if (match && match[1]) {
         const link = match[1];
-        const file = this.app.metadataCache.getFirstLinkpathDest(link, ctx.sourcePath);
+        const file = this.app.metadataCache.getFirstLinkpathDest(link, ctx2.sourcePath);
         if (file && file instanceof import_obsidian.TFile) {
           const format = file.extension.toLowerCase();
-          const wrapper = el.createDiv();
-          wrapper.style.textAlign = "center";
-          wrapper.style.border = "1px solid var(--background-modifier-border)";
-          wrapper.style.borderRadius = "5px";
-          wrapper.style.padding = "10px";
-          wrapper.style.cursor = "pointer";
           wrapper.title = `Double-click to edit ${file.name}`;
-          wrapper.innerHTML = `<span class="color-text-muted">Loading preview...</span>`;
           const data = await this.app.vault.read(file);
-          const previewEl = await this.renderMoleculeToPreview(data, format, false);
+          const previewEl2 = await this.renderMoleculeToPreview(data, format, false);
           if (!wrapper.isConnected) return;
           wrapper.empty();
-          if (previewEl) wrapper.appendChild(previewEl);
-          else wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b><br><span class="color-text-muted">Double-click to open Ketcher</span></div>`;
+          if (previewEl2) wrapper.appendChild(previewEl2);
+          else wrapper.innerHTML = `<div style="padding: 10px;">\u{1F9EA} <b>${file.name}</b></div>`;
           wrapper.addEventListener("dblclick", async (e) => {
             e.stopPropagation();
             const freshData = await this.app.vault.read(file);
-            new KetcherModal(this, freshData, format, async (newData) => {
+            new KetcherModal(this, freshData, format, async (newData, isFile) => {
               await this.app.vault.modify(file, newData);
               wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
               const updatedEl = await this.renderMoleculeToPreview(newData, format, false);
@@ -4894,11 +5167,49 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
           });
           return;
         }
+        wrapper.innerHTML = `<span class="color-red">File not found: ${link}</span>`;
+        return;
       }
-      el.createDiv({ text: "Please use the format: [[filename.mol]]", cls: "color-red" });
+      const rawData = source.trim();
+      if (!rawData) {
+        wrapper.innerHTML = `Empty block.`;
+        return;
+      }
+      wrapper.title = `Double-click to edit structure`;
+      const previewEl = await this.renderMoleculeToPreview(rawData, defaultFormat, false);
+      if (!wrapper.isConnected) return;
+      wrapper.empty();
+      if (previewEl) wrapper.appendChild(previewEl);
+      else wrapper.innerHTML = `<div class="color-text-muted">Error rendering raw structure.</div>`;
+      wrapper.addEventListener("dblclick", async (e) => {
+        e.stopPropagation();
+        const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        if (!view) return;
+        const info = ctx2.getSectionInfo(el);
+        new KetcherModal(this, rawData, defaultFormat, (newData, isFile) => {
+          const editor = view.editor;
+          if (info) {
+            if (isFile) {
+              editor.replaceRange(
+                `\`\`\`mol
+${newData}
+\`\`\``,
+                { line: info.lineStart, ch: 0 },
+                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length }
+              );
+            } else {
+              editor.replaceRange(
+                newData + "\n",
+                { line: info.lineStart + 1, ch: 0 },
+                { line: info.lineEnd, ch: 0 }
+              );
+            }
+          }
+        }).open();
+      });
     };
-    this.registerMarkdownCodeBlockProcessor("mol", fileCodeblockProcessor);
-    this.registerMarkdownCodeBlockProcessor("cdxml", fileCodeblockProcessor);
+    this.registerMarkdownCodeBlockProcessor("mol", (s, e, c) => fileCodeblockProcessor(s, e, c, "mol"));
+    this.registerMarkdownCodeBlockProcessor("cdxml", (s, e, c) => fileCodeblockProcessor(s, e, c, "cdxml"));
     this.registerMarkdownCodeBlockProcessor("smiles", (source, el) => {
       const cleanSmiles = source.trim();
       const wrapper = document.createElement("div");
@@ -4936,11 +5247,28 @@ var ChemEditPlugin = class extends import_obsidian.Plugin {
       wrapper.addEventListener("dblclick", () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (!view) return;
-        new KetcherModal(this, cleanSmiles, "smiles", (newData) => {
+        const info = ctx.getSectionInfo(el);
+        new KetcherModal(this, cleanSmiles, "smiles", (newData, isFile) => {
           const editor = view.editor;
-          const content = editor.getValue();
-          const updatedContent = content.replace(source, newData + "\n");
-          editor.setValue(updatedContent);
+          if (info) {
+            if (isFile) {
+              editor.replaceRange(
+                `\`\`\`mol
+${newData}
+\`\`\``,
+                { line: info.lineStart, ch: 0 },
+                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length }
+              );
+            } else {
+              editor.replaceRange(
+                `\`\`\`smiles
+${newData}
+\`\`\``,
+                { line: info.lineStart, ch: 0 },
+                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length }
+              );
+            }
+          }
         }).open();
       });
     });
@@ -5424,6 +5752,7 @@ var KetcherModal = class extends import_obsidian.Modal {
   format;
   onSave;
   messageListener;
+  isSavingAsFile = null;
   constructor(plugin, initialData, format, onSave) {
     super(plugin.app);
     this.plugin = plugin;
@@ -5450,8 +5779,17 @@ var KetcherModal = class extends import_obsidian.Modal {
     };
     this.messageListener = (event) => {
       if (event.data && event.data.type === "saveMolecule") {
-        this.onSave(event.data.data);
-        this.close();
+        if (this.isSavingAsFile) {
+          this.plugin.app.vault.create(this.isSavingAsFile, event.data.data).then(() => {
+            this.onSave(`[[${this.isSavingAsFile}]]`, true);
+            this.close();
+          }).catch((e) => {
+            new import_obsidian.Notice("Error saving file. Does a file with that name already exist?");
+          });
+        } else {
+          this.onSave(event.data.data, false);
+          this.close();
+        }
       }
     };
     window.addEventListener("message", this.messageListener);
@@ -5460,17 +5798,55 @@ var KetcherModal = class extends import_obsidian.Modal {
     btnContainer.style.justifyContent = "flex-end";
     btnContainer.style.marginTop = "10px";
     btnContainer.style.gap = "10px";
-    const saveBtn = btnContainer.createEl("button", { text: "Save to Note", cls: "mod-cta" });
+    const saveBtn = btnContainer.createEl("button", { text: "Save", cls: "mod-cta" });
+    const saveFileBtn = btnContainer.createEl("button", { text: "Save as .mol File" });
     const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
     saveBtn.onclick = () => {
-      if (iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: "getMolecule", format: this.format }, "*");
-      }
+      if (iframe.contentWindow) iframe.contentWindow.postMessage({ type: "getMolecule", format: this.format }, "*");
+    };
+    saveFileBtn.onclick = () => {
+      new FilenamePromptModal(this.plugin.app, (filename) => {
+        let safeName = filename.trim();
+        if (!safeName.endsWith(".mol")) safeName += ".mol";
+        this.isSavingAsFile = safeName;
+        if (iframe.contentWindow) iframe.contentWindow.postMessage({ type: "getMolecule", format: "mol" }, "*");
+      }).open();
     };
     cancelBtn.onclick = () => this.close();
   }
   onClose() {
     window.removeEventListener("message", this.messageListener);
+    this.contentEl.empty();
+  }
+};
+var FilenamePromptModal = class extends import_obsidian.Modal {
+  onSubmit;
+  constructor(app, onSubmit) {
+    super(app);
+    this.onSubmit = onSubmit;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Enter a filename:" });
+    const input = contentEl.createEl("input", { type: "text", placeholder: "molecule.mol" });
+    input.style.width = "100%";
+    input.style.marginBottom = "10px";
+    input.addEventListener("keypress", (e) => {
+      if (e.key === "Enter" && input.value) {
+        this.onSubmit(input.value);
+        this.close();
+      }
+    });
+    const btn = contentEl.createEl("button", { text: "Save", cls: "mod-cta" });
+    btn.onclick = () => {
+      if (input.value) {
+        this.onSubmit(input.value);
+        this.close();
+      }
+    };
+    setTimeout(() => input.focus(), 50);
+  }
+  onClose() {
     this.contentEl.empty();
   }
 };
