@@ -23,20 +23,7 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 ## 🚀 How to Use
 
-### 1. ChemDraw & Mol files (.cdxml, .mol)
-
-Drop a chemistry file into your vault and embed it in your note:
-
-```markdown
-![[reaction.cdxml]]
-![[aspirine.mol]]
-```
-
-ChemEdit replaces the generic file box with a crisp SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
-
-> ⚠️ **Disclaimer on `.cdxml` files:** ChemEdit uses Ketcher's open-source conversion engine. While most standard structures and reactions work perfectly, highly complex formatting or proprietary ChemDraw-specific objects may not be 100% supported.
-
-### 2. SMILES Strings
+### 1. SMILES Strings
 
 Write SMILES strings directly in your markdown using code blocks:
 
@@ -45,6 +32,25 @@ Write SMILES strings directly in your markdown using code blocks:
 CC(=O)OC1=CC=CC=C1C(=O)O
 ```
 ```
+```
+
+### 1. ChemDraw & Mol files (.cdxml, .mol)
+
+Drop a chemistry file into your vault and embed it in your note:
+
+```markdown
+```mol
+![[caffeine.cdxml]]
+```
+
+```mol
+![[aspirine.mol]]
+```
+
+ChemEdit replaces the generic file box with a crisp SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
+
+> ⚠️ **Disclaimer on `.cdxml` files:** ChemEdit uses Ketcher's open-source conversion engine. While most standard structures and reactions work perfectly, highly complex formatting or proprietary ChemDraw-specific objects may not be 100% supported.
+
 
 *Double-click the structure to edit it visually. Saving will automatically update the text in your code block.*
 
