@@ -2,7 +2,7 @@
 
 **Bring chemistry to Obsidian.** 
 
-ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by **Ketcher** and **SmilesDrawer**, it allows you to natively draw reactions, edit `.mol` files, and preview ChemDraw (`.cdxml`) files directly inside your vault without ever switching apps.
+ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by **Ketcher** and **SmilesDrawer**, it allows you to natively draw reactions, edit `.mol` files, preview ChemDraw (`.cdxml`) files directly inside your vault, and keep simple electronic lab notebooks (ELNs).
 
 ### Quick Demo
 
@@ -34,7 +34,7 @@ CC(=O)OC1=CC=CC=C1C(=O)O
 ```
 ```
 
-### 1. ChemDraw & Mol files (.cdxml, .mol)
+### 2. ChemDraw & Mol files (.cdxml, .mol)
 
 Drop a chemistry file into your vault and embed it in your note:
 
@@ -47,7 +47,7 @@ Drop a chemistry file into your vault and embed it in your note:
 ![[aspirine.mol]]
 ```
 
-ChemEdit replaces the generic file box with a crisp SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
+ChemEdit replaces the generic file box with an SVG rendering. **Double-click the image** to open Ketcher, edit the molecule, and save!
 
 > ⚠️ **Disclaimer on `.cdxml` files:** ChemEdit uses Ketcher's open-source conversion engine. While most standard structures and reactions work perfectly, highly complex formatting or proprietary ChemDraw-specific objects may not be 100% supported.
 
@@ -60,25 +60,7 @@ Click the **Hexagon Icon** in your left-hand ribbon (or use the Command Palette:
 
 ---
 
-## ⚡ Online vs. Offline Mode
-
-By default, ChemEdit runs in **Online Proxy Mode**, streaming the editor from EPAM's servers. Rendering previews requires an internet connection and may be subject to API rate-limiting.
-
-For the ultimate experience, enable **Offline Mode**. Previews generate instantly, files are processed securely on your local machine, and everything works without Wi-Fi!
-
-### How to enable Offline Mode:
-
-1. Download the latest `ketcher-standalone.zip` from the [Official Ketcher Releases](https://github.com/epam/ketcher/releases/latest).
-2. Go to your Obsidian vault's plugin folder: `.obsidian/plugins/chemedit/`
-3. Create a folder named `ketcher`.
-4. Extract the `.zip` contents into that folder. It should look like this:
-   `.../.obsidian/plugins/chemedit/ketcher/index.html`
-5. Restart Obsidian. 
-6. Go to **Settings > ChemEdit**. You should see a green ✅ **Offline Mode Active** status!
-
----
-
-## 🧪 (basic) Electronic Lab Notebook (ELN)
+## 🧪 (basic support) Electronic Lab Notebook (ELN)
 
 ChemEdit includes an, automatic stoichiometry calculator and experimental logbook generator. Using a simple YAML code block, you can define your reaction, and ChemEdit will:
 
@@ -135,6 +117,7 @@ products:
 
 procedure: |  
   Salicylic acid was mixed with acetic anhydride, followed by the addition of catalytic sulfuric acid. The reaction mixture was heated at 80 °C for 20 min, then cooled and poured into ice-water. The precipitated aspirin was collected by filtration, washed with cold water, and dried.
+```
 ```
 ```
 
