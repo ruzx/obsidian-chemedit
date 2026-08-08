@@ -1,11 +1,13 @@
 {
   "name": "obsidian-chemedit",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Draw, edit, and preview chemical structures and reactions (SMILES, MOL:.mol, Chemdraw:.cdxml) using Ketcher.",
   "main": "main.js",
   "scripts": {
-    "build": "esbuild main.ts --bundle --format=cjs --platform=browser --external:obsidian --external:jsdom --external:canvas --define:process.env.NODE_ENV=\"\\\"production\\\"\" --outfile=main.js"
-},
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
+  },
   "keywords": [],
   "author": "Ruzal",
   "license": "MIT",
