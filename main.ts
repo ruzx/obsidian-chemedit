@@ -158,62 +158,6 @@ export default class ChemEditPlugin extends Plugin {
         });
 
         // ---------------------------------------------------------
-        // NATIVE OBSIDIAN EMBEDS (e.g. ![[file.mol]] or ![[file.cdxml]])
-        // ---------------------------------------------------------
-        this.registerMarkdownPostProcessor(async (el, ctx) => {
-            const embeds = el.querySelectorAll('.internal-embed');
-            
-            // Array.from is used to ensure stable DOM replacement
-            Array.from(embeds).forEach(async (embed) => {
-                const src = embed.getAttribute('src');
-                if (!src) return;
-                
-                const cleanSrc = decodeURIComponent(src).split('#')[0].split('?')[0].trim();
-                const lowerSrc = cleanSrc.toLowerCase();
-                
-                if (cleanSrc && (lowerSrc.endsWith('.mol') || lowerSrc.endsWith('.cdxml'))) {
-                    const file = this.app.metadataCache.getFirstLinkpathDest(cleanSrc, ctx.sourcePath);
-                    if (!file || !(file instanceof TFile)) return;
-
-                    const wrapper = this.createBaseWrapper(`Double-click to edit ${file.name}`);
-                    
-                    // CRITICAL FIX: Obsidian populates the default grey file card asynchronously.
-                    // If we just use embed.empty(), Obsidian will overwrite our preview a millisecond later.
-                    // By completely replacing the node, Obsidian's fallback updates a dead, detached DOM node.
-                    embed.replaceWith(wrapper);
-
-                    const fileData = await this.app.vault.read(file);
-                    const format = file.extension.toLowerCase();
-                    const previewEl = await this.renderMoleculeToPreview(fileData, format, false);
-                    
-                    if (!wrapper.isConnected) return;
-                    wrapper.innerHTML = '';
-
-                    if (previewEl) {
-                        wrapper.appendChild(previewEl);
-                    } else {
-                        wrapper.appendChild(this.createErrorCard(`Invalid format in ${file.name}`));
-                    }
-
-                    wrapper.addEventListener("dblclick", async (e) => {
-                        e.stopPropagation(); 
-                        const freshData = await this.app.vault.read(file);
-                        
-                        new KetcherModal(this, freshData, format, async (newData) => {
-                            await this.app.vault.modify(file, newData);
-                            wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
-                            const updatedEl = await this.renderMoleculeToPreview(newData, format, false);
-                            if(updatedEl && wrapper.isConnected) {
-                                wrapper.innerHTML = '';
-                                wrapper.appendChild(updatedEl);
-                            }
-                        }).open();
-                    });
-                }
-            });
-        });
-
-        // ---------------------------------------------------------
         // ELN PROCESSOR
         // ---------------------------------------------------------
         this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
@@ -462,7 +406,7 @@ export default class ChemEditPlugin extends Plugin {
 
             const rawData = source.trim();
             
-            // Look for explicit file links or strings that simply end in a chemical extension
+            // Allow [[file.mol]], [file.mol], or just file.mol 
             const bracketMatch = rawData.match(/\[\[(.*?)\]\]/);
             let filenameToSearch = "";
             
@@ -831,7 +775,6 @@ export default class ChemEditPlugin extends Plugin {
         }
     }
 
-    // --- BULLETPROOF HEADLESS QUEUE ---
     async processHeadlessQueue() {
         if (this.isProcessingHeadless || !this.headlessKetcher || this.headlessQueue.length === 0) return;
         
