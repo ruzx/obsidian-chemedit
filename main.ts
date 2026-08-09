@@ -1,8 +1,11 @@
-import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile } from 'obsidian';
+import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, Platform } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
+import { StandaloneStructServiceProvider } from 'ketcher-standalone';
 import KetcherReact from './KetcherReact';
+
+const standaloneProvider = new StandaloneStructServiceProvider();
 
 interface ChemEditSettings {
     width: number;
@@ -33,10 +36,31 @@ const DEFAULT_SETTINGS: ChemEditSettings = {
 export default class ChemEditPlugin extends Plugin {
     settings: ChemEditSettings;
     
+    // --- Headless Renderer Variables ---
     hiddenKetcherContainer: HTMLDivElement;
     headlessKetcher: any = null;
     isProcessingHeadless = false;
     headlessQueue: { data: string, isInline: boolean, resolve: (el: HTMLElement | null) => void }[] = [];
+
+    // --- EXPOSE API FOR OTHER PLUGINS ---
+    public api = {
+        openEditor: (initialData: string, format: string, onSave: (data: string) => void) => {
+            new KetcherModal(this, initialData, format, onSave).open();
+        },
+        renderStructure: async (data: string, width: number, height: number): Promise<HTMLElement | null> => {
+            const originalW = this.settings.width;
+            const originalH = this.settings.height;
+            this.settings.width = width;
+            this.settings.height = height;
+            
+            const el = await this.renderMoleculeToPreview(data, 'smiles', false);
+            
+            this.settings.width = originalW;
+            this.settings.height = originalH;
+            return el;
+        }
+    };
+
 
     async onload() {
         await this.loadSettings();

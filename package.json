@@ -1,6 +1,6 @@
 {
   "name": "obsidian-chemedit",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Draw, edit, and preview chemical structures and reactions (SMILES, MOL:.mol, Chemdraw:.cdxml) using Ketcher.",
   "main": "main.js",
   "scripts": {
