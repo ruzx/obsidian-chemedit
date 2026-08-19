@@ -8,6 +8,11 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 <img width="400" height="327" alt="Image" src="https://github.com/user-attachments/assets/82b0f569-50e6-47e7-bd71-f22938a3148f" />
 
+### 🚀 What's New in ChemEdit
+*   **Interactive ELN Editor:** Added a floating action bar to ELN blocks. You can now visually edit Reactants, Products, Equivalents, and Procedures via a clean UI without touching Markdown YAML!
+*   **🧪 Auto-Name Structures:** Added a smart "Auto-Name" button inside the ELN editor that automatically fetches IUPAC/Common names for your drawn structures via PubChem/CACTUS.
+*   **📸 Fume Hood Utilities (Media Ribbon):** Take Lab Photos or upload TLC plates directly into your notes. 
+***
 
 <video src="https://github.com/user-attachments/assets/e215352a-7717-4c9a-bf95-c134b9a81ecd" controls width="800"></video>
 
@@ -54,7 +59,7 @@ The structure of Benzene is $smiles=C1=CC=CC=C1 and it is a liquid at room temp.
 ```
 
 ### 4. Draw from Scratch
-Click the **Flask Icon** in your left-hand ribbon (or use the Command Palette: *Draw new SMILES molecule*) to open a blank canvas. Draw your structure, select your desired format, hit **Save**, and it will be inserted exactly where you are typing.
+Click the **Hexagon (cyclohexane) Icon** in your left-hand ribbon (or use the Command Palette: *Draw new SMILES molecule*) to open a blank canvas. Draw your structure, select your desired format, hit **Save**, and it will be inserted exactly where you are typing.
 
 ---
 
