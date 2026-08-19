@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
 import { StandaloneStructServiceProvider } from 'ketcher-standalone';
 import KetcherReact from './KetcherReact';
+import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 
 // Safely handle React 18 root rendering
 let createRoot: any = null;
@@ -75,6 +76,9 @@ export default class ChemEditPlugin extends Plugin {
 
     async onload() {
         await this.loadSettings();
+        
+        // Inject CSS to fix Obsidian's native embeds (hide default boxes & remove borders)
+        
         this.addSettingTab(new ChemEditSettingTab(this.app, this));
 
         this.hiddenKetcherContainer = document.createElement('div');
@@ -92,6 +96,9 @@ export default class ChemEditPlugin extends Plugin {
 
         this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
         this.registerExtensions(["mol", "cdxml", "ket", "sdf", "rxn", "inchi", "smarts"], "chem-file-view");
+        
+        this.registerEditorExtension(this.buildLivePreviewPlugin());
+		
 
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => {
             this.openNewDrawingModal();
@@ -102,7 +109,13 @@ export default class ChemEditPlugin extends Plugin {
             name: 'Draw new SMILES molecule',
             editorCallback: (editor: Editor) => {
                 new KetcherModal(this, "", "smiles", (newData, isFile, newFormat) => {
-                    this.insertSmilesAtCursor(editor, newData, newFormat || "smiles");
+                    if (isFile) {
+                        const cursor = editor.getCursor();
+                        editor.replaceRange(`!${newData}\n`, cursor);
+                        editor.setCursor({ line: cursor.line + 1, ch: 0 });
+                    } else {
+                        this.insertSmilesAtCursor(editor, newData, newFormat || "smiles");
+                    }
                 }).open();
             }
         });
@@ -112,20 +125,26 @@ export default class ChemEditPlugin extends Plugin {
             name: 'Draw new inline molecule',
             editorCallback: (editor: Editor) => {
                 new KetcherModal(this, "", "smiles", (newData, isFile, newFormat) => {
-                    if (newFormat === "ket") {
-                        new Notice("Cannot save inline reaction. Inserting as code block instead.");
-                        this.insertSmilesAtCursor(editor, newData, "ket");
-                        return;
-                    }
                     const cursor = editor.getCursor();
-                    const textToInsert = `${this.settings.inlineSmilesPrefix}${newData} `;
-                    editor.replaceRange(textToInsert, cursor);
-                    editor.setCursor({ line: cursor.line, ch: cursor.ch + textToInsert.length });
+                    if (isFile) {
+                        editor.replaceRange(`!${newData} `, cursor);
+                        editor.setCursor({ line: cursor.line, ch: cursor.ch + newData.length + 2 });
+                    } else {
+                        if (newFormat === "ket") {
+                            new Notice("Cannot save inline reaction. Inserting as code block instead.");
+                            this.insertSmilesAtCursor(editor, newData, "ket");
+                            return;
+                        }
+                        const textToInsert = `${this.settings.inlineSmilesPrefix}${newData} `;
+                        editor.replaceRange(textToInsert, cursor);
+                        editor.setCursor({ line: cursor.line, ch: cursor.ch + textToInsert.length });
+                    }
                 }).open();
             }
         });
 
         this.registerMarkdownPostProcessor(async (el, ctx) => {
+            // --- 1. EXISTING INLINE STRING LOGIC ($smiles=, $mol=) ---
             const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
             const nodes: Text[] = [];
             let node;
@@ -138,6 +157,25 @@ export default class ChemEditPlugin extends Plugin {
                 }
                 else if (this.settings.inlineMolPrefix && text.includes(this.settings.inlineMolPrefix)) {
                     this.processInlineString(n, text, this.settings.inlineMolPrefix, 'file', ctx.sourcePath);
+                }
+            }
+
+            // --- 2. READING MODE NATIVE EMBEDS ---
+            const embeds = Array.from(el.querySelectorAll('.internal-embed'));
+            if (el.classList?.contains('internal-embed')) {
+                embeds.push(el);
+            }
+
+            for (const embed of embeds) {
+                const src = embed.getAttribute('src');
+                if (!src) continue;
+                
+                const lowerSrc = src.toLowerCase();
+                if (lowerSrc.endsWith('.mol') || lowerSrc.endsWith('.cdxml') || lowerSrc.endsWith('.ket') || lowerSrc.endsWith('.sdf') || lowerSrc.endsWith('.rxn')) {
+                    if (embed.hasAttribute('data-chem-preview-done')) continue;
+                    embed.setAttribute('data-chem-preview-done', 'true');
+
+                    this.injectNativeEmbed(embed as HTMLElement, src, ctx.sourcePath);
                 }
             }
         });
@@ -181,6 +219,13 @@ export default class ChemEditPlugin extends Plugin {
                     if (cursor.ch >= startIndex && cursor.ch <= endIndex) {
                         const rawData = lineText.substring(startIndex + prefix.length, endIndex).trim();
                         new KetcherModal(this, rawData, "smiles", (newData, isFile, newFormat) => {
+                            if (isFile) {
+                                editor.replaceRange(`!${newData}`, 
+                                    {line: cursor.line, ch: startIndex}, 
+                                    {line: cursor.line, ch: endIndex}
+                                );
+                                return;
+                            }
                             if (newFormat === "ket") {
                                 new Notice("Inline reactions not supported. Replaced with codeblock.");
                                 editor.replaceRange(`\n\`\`\`ket\n${newData}\n\`\`\`\n`, 
@@ -462,7 +507,7 @@ export default class ChemEditPlugin extends Plugin {
             
             if (bracketMatch && bracketMatch[1]) {
                 filenameToSearch = bracketMatch[1];
-            } else if (rawData.endsWith('.mol') || rawData.endsWith('.cdxml') || rawData.endsWith('.sdf')) {
+            } else if (rawData.endsWith('.mol') || rawData.endsWith('.cdxml') || rawData.endsWith('.sdf') || rawData.endsWith('.rxn') || rawData.endsWith('.ket')) {
                 filenameToSearch = rawData;
             }
 
@@ -477,8 +522,6 @@ export default class ChemEditPlugin extends Plugin {
                     const data = await this.app.vault.read(file);
                     const previewEl = await this.renderMoleculeToPreview(data, format, false);
                     
-                    if (!wrapper.isConnected) return;
-                    wrapper.empty();
 
                     if (previewEl) wrapper.appendChild(previewEl);
                     else wrapper.appendChild(this.createErrorCard(`Invalid format in ${file.name}`));
@@ -487,13 +530,17 @@ export default class ChemEditPlugin extends Plugin {
                         e.stopPropagation();
                         const freshData = await this.app.vault.read(file);
                         new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
+                            if (isFile) {
+                                new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
+                                return;
+                            }
                             if (newFormat && newFormat !== format) {
                                 new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
                             }
                             await this.app.vault.modify(file, newData);
                             wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
                             const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
-                            if (updatedEl && wrapper.isConnected) {
+                            if (updatedEl) {
                                 wrapper.empty(); wrapper.appendChild(updatedEl);
                             }
                         }).open();
@@ -513,8 +560,6 @@ export default class ChemEditPlugin extends Plugin {
             
             requestAnimationFrame(async () => {
                 const previewEl = await this.renderMoleculeToPreview(source, defaultFormat, false);
-                if (!wrapper.isConnected) return;
-                wrapper.empty();
                 if (previewEl) wrapper.appendChild(previewEl);
                 else wrapper.appendChild(this.createErrorCard("Invalid chemical format"));
             });
@@ -528,10 +573,16 @@ export default class ChemEditPlugin extends Plugin {
                 new KetcherModal(this, source, defaultFormat, (newData, isFile, newFormat) => {
                     const editor = view.editor;
                     if (info) {
-                        const finalFormat = newFormat || defaultFormat;
-                        editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
-                            { line: info.lineStart, ch: 0 }, 
-                            { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        if (isFile) {
+                            editor.replaceRange(`!${newData}\n`, 
+                                { line: info.lineStart, ch: 0 }, 
+                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        } else {
+                            const finalFormat = newFormat || defaultFormat;
+                            editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
+                                { line: info.lineStart, ch: 0 }, 
+                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        }
                     }
                 }).open();
             });
@@ -613,10 +664,16 @@ export default class ChemEditPlugin extends Plugin {
                 new KetcherModal(this, cleanSmiles, "smiles", (newData, isFile, newFormat) => {
                     const editor = view.editor;
                     if (info) {
-                        const finalFormat = newFormat || "smiles";
-                        editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
-                            { line: info.lineStart, ch: 0 }, 
-                            { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        if (isFile) {
+                            editor.replaceRange(`!${newData}\n`, 
+                                { line: info.lineStart, ch: 0 }, 
+                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        } else {
+                            const finalFormat = newFormat || "smiles";
+                            editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
+                                { line: info.lineStart, ch: 0 }, 
+                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                        }
                     }
                 }).open();
             });
@@ -777,15 +834,19 @@ export default class ChemEditPlugin extends Plugin {
                 const view = this.app.workspace.getActiveViewOfType(MarkdownView);
                 if (!view) return;
                 new KetcherModal(this, rawData, "smiles", (newData, isFile, newFormat) => {
+                    const editor = view.editor;
+                    const content = editor.getValue();
+                    if (isFile) {
+                        const updatedContent = content.replace(prefix + rawData, `!${newData}`);
+                        editor.setValue(updatedContent);
+                        return;
+                    }
                     if (newFormat === "ket") {
                         new Notice("Inline reactions not supported. Inserted as block.");
-                        const content = editor.getValue();
                         const updatedContent = content.replace(prefix + rawData, `\n\`\`\`ket\n${newData}\n\`\`\`\n`);
                         editor.setValue(updatedContent);
                         return;
                     }
-                    const editor = view.editor;
-                    const content = editor.getValue();
                     const updatedContent = content.replace(prefix + rawData, prefix + newData);
                     editor.setValue(updatedContent);
                 }).open();
@@ -801,7 +862,7 @@ export default class ChemEditPlugin extends Plugin {
                 
                 requestAnimationFrame(async () => {
                     const previewEl = await this.renderMoleculeToPreview(fileData, format, true);
-                    if (previewEl && wrapper.isConnected) {
+                    if (previewEl) {
                         wrapper.innerHTML = '';
                         wrapper.appendChild(previewEl);
                     } else {
@@ -813,13 +874,17 @@ export default class ChemEditPlugin extends Plugin {
                     e.stopPropagation();
                     const freshData = await this.app.vault.read(file);
                     new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
+                        if (isFile) {
+                            new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
+                            return;
+                        }
                         if (newFormat && newFormat !== format) {
                             new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
                         }
                         await this.app.vault.modify(file, newData);
                         wrapper.innerHTML = `⏳`;
                         const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, true);
-                        if (updatedEl && wrapper.isConnected) {
+                        if (updatedEl) {
                             wrapper.innerHTML = '';
                             wrapper.appendChild(updatedEl);
                         }
@@ -836,6 +901,7 @@ export default class ChemEditPlugin extends Plugin {
         if (this.hiddenKetcherContainer) {
             this.hiddenKetcherContainer.remove();
         }
+        
     }
 
     async loadSettings() {
@@ -852,8 +918,14 @@ export default class ChemEditPlugin extends Plugin {
             new Notice("Please open a Markdown file first to insert a drawing.");
             return;
         }
-        new KetcherModal(this, "", "smiles", (newSmiles, isFile, newFormat) => {
-            this.insertSmilesAtCursor(view.editor, newSmiles, newFormat || "smiles");
+        new KetcherModal(this, "", "smiles", (newData, isFile, newFormat) => {
+            if (isFile) {
+                const cursor = view.editor.getCursor();
+                view.editor.replaceRange(`!${newData}\n`, cursor);
+                view.editor.setCursor({ line: cursor.line + 1, ch: 0 });
+            } else {
+                this.insertSmilesAtCursor(view.editor, newData, newFormat || "smiles");
+            }
         }).open();
     }
 
@@ -864,7 +936,127 @@ export default class ChemEditPlugin extends Plugin {
         editor.setCursor({ line: cursor.line + 3, ch: 0 });
     }
 
-    async renderMoleculeToPreview(data: string, format: string, isInline: boolean = false): Promise<HTMLElement | null> {
+    async injectNativeEmbed(embed: HTMLElement, src: string, sourcePath: string) {
+        const file = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
+        if (!(file instanceof TFile)) {
+            embed.innerHTML = `<div class="chem-native-embed-wrapper color-red">File not found: ${src}</div>`;
+            return;
+        }
+
+        embed.classList.add('chem-custom-embed');
+
+        const wrapper = document.createElement("div"); 
+        wrapper.className = "chem-native-embed-wrapper";
+        wrapper.style.cursor = "pointer";
+        wrapper.style.display = "flex";
+        wrapper.style.justifyContent = "center";
+        wrapper.style.margin = "10px 0";
+        wrapper.title = `Double-click to edit ${file.name}`;
+        
+        const loadingDiv = document.createElement("div");
+        loadingDiv.className = "color-text-muted";
+        loadingDiv.style.padding = "15px";
+        loadingDiv.style.border = "1px solid var(--background-modifier-border)";
+        loadingDiv.style.borderRadius = "8px";
+        loadingDiv.innerHTML = `⏳ Loading ${file.extension.toUpperCase()}...`;
+        wrapper.appendChild(loadingDiv);
+        
+        // Initial wipe & inject
+        embed.innerHTML = '';
+        embed.appendChild(wrapper);
+
+        // PROTECT against Obsidian's async file renderer overwriting our wrapper
+        const observer = new MutationObserver(() => {
+            if (!embed.contains(wrapper)) {
+                embed.innerHTML = '';
+                embed.appendChild(wrapper);
+            }
+        });
+        observer.observe(embed, { childList: true });
+
+        const format = file.extension.toLowerCase();
+        const fileData = await this.app.vault.read(file);
+
+        requestAnimationFrame(async () => {
+            const previewEl = await this.renderMoleculeToPreview(fileData, format, false); 
+            // Removed isConnected check because Reading Mode elements are detached!
+            if (previewEl) {
+                wrapper.empty();
+                previewEl.style.border = "1px solid var(--background-modifier-border)";
+                previewEl.style.borderRadius = "8px";
+                previewEl.style.padding = "10px";
+                previewEl.style.backgroundColor = "var(--background-primary)";
+                wrapper.appendChild(previewEl);
+            } else {
+                wrapper.empty();
+                wrapper.appendChild(this.createErrorCard(`Failed to render ${file.name}`));
+            }
+        });
+
+        wrapper.addEventListener("dblclick", async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            
+            const freshData = await this.app.vault.read(file);
+            
+            new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
+                if (isFile) {
+                    new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
+                    return;
+                }
+                if (newFormat && newFormat !== format) {
+                    new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
+                }
+                await this.app.vault.modify(file, newData);
+                
+                wrapper.innerHTML = `<div class="color-text-muted" style="padding:15px; border:1px solid var(--background-modifier-border); border-radius:8px;">⏳ Updating...</div>`;
+                const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
+                
+                if (updatedEl) { 
+                    wrapper.empty();
+                    updatedEl.style.border = "1px solid var(--background-modifier-border)";
+                    updatedEl.style.borderRadius = "8px";
+                    updatedEl.style.padding = "10px";
+                    updatedEl.style.backgroundColor = "var(--background-primary)";
+                    wrapper.appendChild(updatedEl);
+                }
+            }).open();
+        });
+    }
+
+    buildLivePreviewPlugin() {
+        const plugin = this;
+        return ViewPlugin.fromClass(class {
+            constructor(public view: EditorView) {
+                this.processEmbeds();
+            }
+            update(update: ViewUpdate) {
+                if (update.docChanged || update.viewportChanged) {
+                    setTimeout(() => this.processEmbeds(), 50);
+                }
+            }
+            processEmbeds() {
+                const embeds = this.view.dom.querySelectorAll('.internal-embed');
+                embeds.forEach(embed => {
+                    const src = embed.getAttribute('src');
+                    if (!src) return;
+                    
+                    const lowerSrc = src.toLowerCase();
+                    if (lowerSrc.endsWith('.mol') || lowerSrc.endsWith('.cdxml') || lowerSrc.endsWith('.ket') || lowerSrc.endsWith('.sdf') || lowerSrc.endsWith('.rxn')) {
+                        // Use a data attribute to mark completion
+                        if (embed.hasAttribute('data-chem-preview-done')) return;
+                        embed.setAttribute('data-chem-preview-done', 'true');
+
+                        plugin.injectNativeEmbed(embed as HTMLElement, src, "");
+                    }
+                });
+            }
+        });
+    }
+
+
+	
+	async renderMoleculeToPreview(data: string, format: string, isInline: boolean = false): Promise<HTMLElement | null> {
         if (!data) return null;
         
         const normalizedFormat = format ? format.toLowerCase() : 'smiles';
@@ -1089,6 +1281,10 @@ class ChemFileView extends TextFileView {
 
         wrapper.ondblclick = () => {
             new KetcherModal(this.plugin, this.data, format, async (newData, isFile, newFormat) => {
+                if (isFile) {
+                    new Notice(`Saved as new file: ${newData}`);
+                    return;
+                }
                 if (newFormat && newFormat !== format) {
                     new Notice(`Format was upgraded to ${newFormat}. Please rename the file extension!`);
                 }
@@ -1163,7 +1359,7 @@ class KetcherModal extends Modal {
         btnContainer.style.gap = "10px";
 
         const saveBtn = btnContainer.createEl("button", { text: "Save", cls: "mod-cta" });
-        const saveFileBtn = btnContainer.createEl("button", { text: "Save as .mol File" });
+        const saveFileBtn = btnContainer.createEl("button", { text: "Save as File..." });
         const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
 
         const doSave = async (formatToGet: string) => {
@@ -1192,6 +1388,14 @@ class KetcherModal extends Modal {
                         } else {
                             resultData = await this.ketcherInstance.getMolfile();
                         }
+                    } else if (finalFormat === "rxn") {
+                        if (typeof this.ketcherInstance.getRxn === "function") {
+                            resultData = await this.ketcherInstance.getRxn();
+                        } else if (typeof this.ketcherInstance.getRxnfile === "function") {
+                            resultData = await this.ketcherInstance.getRxnfile();
+                        } else {
+                            resultData = await this.ketcherInstance.getMolfile();
+                        }
                     } else {
                         resultData = await this.ketcherInstance.getMolfile();
                     }
@@ -1202,7 +1406,7 @@ class KetcherModal extends Modal {
                         new Notice("Reactions cannot be saved in this format. Automatically upgraded to .KET format.");
                         
                         if (this.isSavingAsFile) {
-                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.mol$/i, '.ket');
+                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-z]+$/i, '.ket');
                         }
                     } else {
                         throw err;
@@ -1225,11 +1429,14 @@ class KetcherModal extends Modal {
         saveBtn.onclick = () => doSave(this.format);
 
         saveFileBtn.onclick = () => {
-            new FilenamePromptModal(this.plugin.app, (filename) => {
+            new SaveFileModal(this.plugin.app, (filename, selectedFormat) => {
                 let safeName = filename.trim();
-                if (!safeName.endsWith('.mol')) safeName += '.mol';
+                // Remove existing extensions to prevent 'file.cdxml.mol'
+                safeName = safeName.replace(/\.(mol|cdxml|ket|sdf|rxn)$/i, '');
+                
+                safeName += '.' + selectedFormat;
                 this.isSavingAsFile = safeName;
-                doSave('mol');
+                doSave(selectedFormat);
             }).open();
         };
 
@@ -1264,38 +1471,71 @@ class KetcherModal extends Modal {
     }
 }
 
-class FilenamePromptModal extends Modal {
-    onSubmit: (filename: string) => void;
+class SaveFileModal extends Modal {
+    onSubmit: (filename: string, format: string) => void;
+    filename: string = "";
+    format: string = "mol";
 
-    constructor(app: App, onSubmit: (filename: string) => void) {
+    constructor(app: App, onSubmit: (filename: string, format: string) => void) {
         super(app);
         this.onSubmit = onSubmit;
     }
 
     onOpen() {
         const { contentEl } = this;
-        contentEl.createEl("h3", { text: "Enter a filename:" });
-        
-        const input = contentEl.createEl("input", { type: "text", placeholder: "molecule.mol" });
-        input.style.width = "100%";
-        input.style.marginBottom = "10px";
-        
-        input.addEventListener("keypress", (e) => {
-            if (e.key === "Enter" && input.value) {
-                this.onSubmit(input.value);
-                this.close();
-            }
-        });
+        contentEl.createEl("h3", { text: "Save as File..." });
 
-        const btn = contentEl.createEl("button", { text: "Save", cls: "mod-cta" });
-        btn.onclick = () => {
-            if(input.value) { this.onSubmit(input.value); this.close(); }
-        };
-        
-        setTimeout(() => input.focus(), 50);
+        new Setting(contentEl)
+            .setName("Filename")
+            .setDesc("Enter a name for the new chemical file.")
+            .addText(text => text
+                .setPlaceholder("molecule")
+                .onChange(value => { this.filename = value; })
+                .inputEl.addEventListener("keypress", (e) => {
+                    if (e.key === "Enter" && this.filename) {
+                        this.submit();
+                    }
+                }));
+
+        new Setting(contentEl)
+            .setName("Format")
+            .setDesc("Select the file format to save as.")
+            .addDropdown(drop => drop
+                .addOption("mol", ".mol (MDL Molfile)")
+                .addOption("cdxml", ".cdxml (ChemDraw)")
+                .addOption("ket", ".ket (Ketcher Native)")
+                .addOption("rxn", ".rxn (MDL Rxnfile)")
+                .addOption("sdf", ".sdf (Structure Data)")
+                .setValue("mol")
+                .onChange(value => { this.format = value; })
+            );
+
+        new Setting(contentEl)
+            .addButton(btn => btn
+                .setButtonText("Save File")
+                .setCta()
+                .onClick(() => this.submit())
+            );
+            
+        // Auto focus the input field for faster typing
+        setTimeout(() => {
+            const input = contentEl.querySelector('input[type="text"]') as HTMLInputElement;
+            if (input) input.focus();
+        }, 50);
     }
 
-    onClose() { this.contentEl.empty(); }
+    submit() {
+        if (this.filename.trim()) {
+            this.onSubmit(this.filename, this.format);
+            this.close();
+        } else {
+            new Notice("Please enter a filename.");
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
 }
 
 class ChemEditSettingTab extends PluginSettingTab {
