@@ -21,7 +21,8 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 - **Macros Menu:** Instantly drop timestamps or boilerplate text (like aqueous workups and column chromatography procedures) into your markdown via the ⚡ Macros button.
 
 **🖼️ Dynamic Galleries & Embeds**
-- **Gallery Grids:** Type ````chem-gallery path: Folder/```` or ````eln-gallery path: Folder/```` to render beautiful, searchable grids of your structures and past experiments.
+- **Gallery Grids:** Type ````chem-gallery path: Folder/```` or ````eln-gallery path: Folder/```` to render beautiful, searchable grids of your structures and past experiments. 
+<img width="855" height="431" alt="Image" src="https://github.com/user-attachments/assets/539ccf54-1978-47c1-9318-6bf4974eb03e" />
 
 
 <video src="https://github.com/user-attachments/assets/e215352a-7717-4c9a-bf95-c134b9a81ecd" controls width="800"></video>
