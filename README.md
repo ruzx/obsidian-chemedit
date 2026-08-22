@@ -9,10 +9,20 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 <img width="400" height="327" alt="Image" src="https://github.com/user-attachments/assets/82b0f569-50e6-47e7-bd71-f22938a3148f" />
 
 ### 🚀 What's New in ChemEdit
-*   **Interactive ELN Editor:** Added a floating action bar to ELN blocks. You can now visually edit Reactants, Products, Equivalents, and Procedures via a clean UI without touching Markdown YAML!
-*   **🧪 Auto-Name Structures:** Added a smart "Auto-Name" button inside the ELN editor that automatically fetches IUPAC/Common names for your drawn structures via PubChem/CACTUS.
-*   **📸 Fume Hood Utilities (Media Ribbon):** Take Lab Photos or upload TLC plates directly into your notes. 
-***
+- **Interactive ELN Editor:** Added a floating action bar to ELN blocks. You can now visually edit Reactants, Products, Equivalents, and Procedures via a clean UI without touching Markdown YAML!
+- **🧪 Auto-Name Structures:** Added a smart "Auto-Name" button inside the ELN editor that automatically fetches IUPAC/Common names for your drawn structures via PubChem/CACTUS.
+- **📸 Fume Hood Utilities (Media Ribbon):** Take Lab Photos or upload TLC plates directly into your notes. 
+- **Stoichiometry Engine:** Reagents are now fully synced. Set a **⭐ Limiting Reagent**, change its mass, and watch every other chemical scale automatically. 
+- **Concentration Support:** Define reagents by `Purity (%)` or `Molarity (M)`. Volumes (mL) and active masses are calculated instantly.
+
+**⚡ Custom Macros & Media**
+- **Smart Attachment Sync:** Added a custom **Flask** ribbon icon (optional in settings). Creating a new experiment saves it in your default ELN directory. Click `Photo` or `TLC` inside the experiment, and the image is auto-prefixed with your experiment code (e.g. `EXP-005_TLC_1204.png`) and smart-pasted directly into the *Analytical Data* section.
+- **Clone Experiment:** Instantly duplicate a reaction to a new file. It clones the scheme but wipes the yields so you can run it again.
+- **Macros Menu:** Instantly drop timestamps or boilerplate text (like aqueous workups and column chromatography procedures) into your markdown via the ⚡ Macros button.
+
+**🖼️ Dynamic Galleries & Embeds**
+- **Gallery Grids:** Type ````chem-gallery path: Folder/```` or ````eln-gallery path: Folder/```` to render beautiful, searchable grids of your structures and past experiments.
+
 
 <video src="https://github.com/user-attachments/assets/e215352a-7717-4c9a-bf95-c134b9a81ecd" controls width="800"></video>
 

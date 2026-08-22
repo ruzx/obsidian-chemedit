@@ -1,14 +1,16 @@
-import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile } from 'obsidian';
+import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
 import { StandaloneStructServiceProvider } from 'ketcher-standalone';
 import KetcherReact from './KetcherReact';
-import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+import { EditorView, ViewPlugin, ViewUpdate, WidgetType, Decoration, DecorationSet } from "@codemirror/view";
 
 // Modular Imports
-import { SharedElnRenderer } from './SharedEln';
+import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer } from './SharedEln';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
+import { SharedGalleryRenderer } from './SharedGallery';
 
 // Safely handle React 18 root rendering
 let createRoot: any = null;
@@ -36,7 +38,12 @@ interface ChemEditSettings {
     smartPasteMol: boolean;
     useSvgSmiles: boolean;
     mediaSavePath: string;
-    showMediaRibbonIcons: boolean; // Toggle for TLC/Camera icons
+    showMediaRibbonIcons: boolean; 
+    showElnRibbonIcon: boolean;
+    elnDirectory: string;
+    elnPrefix: string;
+    elnSections: string;
+    supportedEmbedExtensions: string;
 }
 
 const DEFAULT_SETTINGS: ChemEditSettings = {
@@ -50,9 +57,14 @@ const DEFAULT_SETTINGS: ChemEditSettings = {
     inlineMolPrefix: '$mol=',
     smartPasteSmiles: false,
     smartPasteMol: false,
-    useSvgSmiles: false,
+    useSvgSmiles: true, // Now defaults to true
     mediaSavePath: "Assets/",
-    showMediaRibbonIcons: false // Disabled by default
+    showMediaRibbonIcons: false, 
+    showElnRibbonIcon: true,
+    elnDirectory: "",
+    elnPrefix: "EXP",
+    elnSections: "TLC, LCMS, NMR",
+    supportedEmbedExtensions: "mol, cdxml, ket, sdf, rxn, inchi, smarts"
 };
 
 export default class ChemEditPlugin extends Plugin {
@@ -67,26 +79,67 @@ export default class ChemEditPlugin extends Plugin {
     // Ribbon Icon References
     cameraRibbonEl: HTMLElement | null = null;
     tlcRibbonEl: HTMLElement | null = null;
+    elnRibbonEl: HTMLElement | null = null;
 
-    public api = {
-        openEditor: (initialData: string, format: string, onSave: (data: string) => void) => {
-            new KetcherModal(this, initialData, format, onSave).open();
-        },
-        renderStructure: async (data: string, width: number, height: number): Promise<HTMLElement | null> => {
-            const originalW = this.settings.width;
-            const originalH = this.settings.height;
-            this.settings.width = width;
-            this.settings.height = height;
+    // Helper to get extensions as clean array
+    getSupportedExts(): string[] {
+        return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
+    }
+
+    refreshRibbonIcons() {
+        // 1. Handle Media Icons
+        if (this.settings.showMediaRibbonIcons) {
+            if (!this.cameraRibbonEl) {
+                this.cameraRibbonEl = this.addRibbonIcon('camera', 'Take Lab Photo', () => {
+                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+                    if (!view) { new Notice("Place cursor in a Markdown file first."); return; }
+                    takeStandardPhoto(async (buffer, ext) => {
+                        const link = await saveMediaFile(this.app, buffer, this.settings.mediaSavePath, `Photo_${window.moment().format("YYYYMMDD_HHmmss")}.${ext}`);
+                        view.editor.replaceSelection(`\n![[${link}]]\n`);
+                    });
+                });
+            } else { this.cameraRibbonEl.style.display = ''; }
             
-            const el = await this.renderMoleculeToPreview(data, 'smiles', false);
-            
-            this.settings.width = originalW;
-            this.settings.height = originalH;
-            return el;
+            if (!this.tlcRibbonEl) {
+                this.tlcRibbonEl = this.addRibbonIcon('image-file', 'Add TLC Plate', () => {
+                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+                    if (!view) { new Notice("Place cursor in a Markdown file first."); return; }
+                    new TlcModal(this.app, async (pngData, rfData) => {
+                        const link = await saveMediaFile(this.app, pngData, this.settings.mediaSavePath, `TLC_${window.moment().format("YYYYMMDD_HHmmss")}.png`);
+                        let md = `\n![[${link}]]\n\n| Spot | $R_f$ |\n|---|---|\n`;
+                        rfData.forEach((s, i) => md += `| ${i+1} | **${s.rf.toFixed(2)}** |\n`);
+                        view.editor.replaceSelection(md);
+                    }).open();
+                });
+            } else { this.tlcRibbonEl.style.display = ''; }
+        } else {
+            if (this.cameraRibbonEl) this.cameraRibbonEl.style.display = 'none';
+            if (this.tlcRibbonEl) this.tlcRibbonEl.style.display = 'none';
         }
-    };
+
+        // 2. Handle the Blank ELN Icon
+        if (this.settings.showElnRibbonIcon) {
+            if (!this.elnRibbonEl) {
+                this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
+                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+                    const currentFolder = this.settings.elnDirectory ? this.settings.elnDirectory : (view?.file?.parent?.path || "");
+                    
+                    new CreateExperimentModal(this, this.settings.elnPrefix, async (expCode) => {
+                        await createNewElnExperiment(this.app, expCode, currentFolder, this.settings.elnSections);
+                    }).open();
+                });
+            } else {
+                this.elnRibbonEl.style.display = '';
+            }
+        } else {
+            if (this.elnRibbonEl) this.elnRibbonEl.style.display = 'none';
+        }
+    }
 
     async onload() {
+        // Register custom Round Bottom Flask icon
+        addIcon('flask-round', `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="5" d="M 42 35 L 42 55 A 18 18 0 1 0 58 55 L 58 35 Z" stroke-linejoin="round"/><line x1="36" y1="35" x2="64" y2="35" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><line x1="32" y1="65" x2="68" y2="65" stroke="currentColor" stroke-width="4" stroke-dasharray="4 4"/>`);
+        
         await this.loadSettings();
         this.addSettingTab(new ChemEditSettingTab(this.app, this));
 
@@ -103,9 +156,16 @@ export default class ChemEditPlugin extends Plugin {
             this.bootHeadlessKetcher();
         });
 
+        const exts = this.getSupportedExts();
         this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
-        this.registerExtensions(["mol", "cdxml", "ket", "sdf", "rxn", "inchi", "smarts"], "chem-file-view");
+        this.registerExtensions(exts, "chem-file-view");
         this.registerEditorExtension(this.buildLivePreviewPlugin());
+		
+		// --- ELN GALLERY PROCESSOR ---
+        this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => {
+            const galleryRenderer = new ElnGalleryRenderer(this); 
+            await galleryRenderer.renderGalleryBlock(source, el, ctx);
+        });
 		
         // Main Drawing Icon (Always visible)
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => {
@@ -175,12 +235,16 @@ export default class ChemEditPlugin extends Plugin {
             const embeds = Array.from(el.querySelectorAll('.internal-embed'));
             if (el.classList?.contains('internal-embed')) embeds.push(el);
 
+            const activeExts = this.getSupportedExts();
+
             for (const embed of embeds) {
                 const src = embed.getAttribute('src');
                 if (!src) continue;
                 
                 const lowerSrc = src.toLowerCase();
-                if (lowerSrc.endsWith('.mol') || lowerSrc.endsWith('.cdxml') || lowerSrc.endsWith('.ket') || lowerSrc.endsWith('.sdf') || lowerSrc.endsWith('.rxn')) {
+                const hasExt = activeExts.some(ext => lowerSrc.endsWith(`.${ext}`));
+                
+                if (hasExt) {
                     if (embed.hasAttribute('data-chem-preview-done')) continue;
                     embed.setAttribute('data-chem-preview-done', 'true');
                     this.injectNativeEmbed(embed as HTMLElement, src, ctx.sourcePath);
@@ -247,14 +311,13 @@ export default class ChemEditPlugin extends Plugin {
 
         // --- MODULAR ELN BLOCK PROCESSOR ---
         this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
-            const elnRenderer = new SharedElnRenderer(this.app, this.settings.mediaSavePath);
+            const elnRenderer = new SharedElnRenderer(this); 
             const wrapper = await elnRenderer.renderElnBlock(source, el, ctx);
             
             // @ts-ignore
             const Smi = SmiDrawer;
             const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
         
-            // Loop over placeholders and draw SVGs
             wrapper.querySelectorAll('.eln-structure').forEach((node: HTMLElement) => {
                 const smiles = node.getAttribute('data-smiles');
                 const cssSize = node.classList.contains('scheme-size') ? 110 : 90;
@@ -279,7 +342,6 @@ export default class ChemEditPlugin extends Plugin {
                     });
                 }
                 
-                // Attach double click to open Ketcher
                 node.addEventListener('dblclick', (e) => {
                     e.stopPropagation();
                     const type = node.getAttribute('data-type');
@@ -307,6 +369,12 @@ export default class ChemEditPlugin extends Plugin {
             el.appendChild(wrapper);
         });
 
+        // --- MODULAR GALLERY PROCESSOR ---
+        this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => {
+            const galleryRenderer = new SharedGalleryRenderer(this);
+            await galleryRenderer.renderGalleryBlock(source, el, ctx);
+        });
+
         // --- FILE EMBED PROCESSOR ---
         const fileCodeblockProcessor = async (source: string, el: HTMLElement, ctx: any, defaultFormat: string) => {
             const wrapper = this.createBaseWrapper(`Loading preview...`);
@@ -318,8 +386,10 @@ export default class ChemEditPlugin extends Plugin {
             
             if (bracketMatch && bracketMatch[1]) {
                 filenameToSearch = bracketMatch[1];
-            } else if (rawData.endsWith('.mol') || rawData.endsWith('.cdxml') || rawData.endsWith('.sdf') || rawData.endsWith('.rxn') || rawData.endsWith('.ket')) {
-                filenameToSearch = rawData;
+            } else {
+                const exts = this.getSupportedExts();
+                const hasExt = exts.some(ext => rawData.toLowerCase().endsWith(`.${ext}`));
+                if (hasExt) filenameToSearch = rawData;
             }
 
             if (filenameToSearch) {
@@ -332,8 +402,8 @@ export default class ChemEditPlugin extends Plugin {
                     
                     const data = await this.app.vault.read(file);
                     const previewEl = await this.renderMoleculeToPreview(data, format, false);
-                    
 
+                    wrapper.empty(); // Clears "Loading preview..."
                     if (previewEl) wrapper.appendChild(previewEl);
                     else wrapper.appendChild(this.createErrorCard(`Invalid format in ${file.name}`));
 
@@ -371,6 +441,7 @@ export default class ChemEditPlugin extends Plugin {
             
             requestAnimationFrame(async () => {
                 const previewEl = await this.renderMoleculeToPreview(source, defaultFormat, false);
+                wrapper.empty(); // Clears "Loading preview..."
                 if (previewEl) wrapper.appendChild(previewEl);
                 else wrapper.appendChild(this.createErrorCard("Invalid chemical format"));
             });
@@ -399,7 +470,7 @@ export default class ChemEditPlugin extends Plugin {
             });
         };
 
-        ["mol", "cdxml", "ket", "sdf", "rxn", "inchi", "smarts"].forEach(fmt => {
+        this.getSupportedExts().forEach(fmt => {
             this.registerMarkdownCodeBlockProcessor(fmt, (s, e, c) => fileCodeblockProcessor(s, e, c, fmt));
         });
 
@@ -490,42 +561,6 @@ export default class ChemEditPlugin extends Plugin {
                 }).open();
             });
         });
-    }
-
-    // --- DYNAMIC RIBBON ICON MANAGER ---
-    refreshRibbonIcons() {
-        if (this.settings.showMediaRibbonIcons) {
-            if (!this.cameraRibbonEl) {
-                this.cameraRibbonEl = this.addRibbonIcon('camera', 'Take Lab Photo', () => {
-                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                    if (!view) { new Notice("Place cursor in a Markdown file first."); return; }
-                    takeStandardPhoto(async (buffer, ext) => {
-                        const link = await saveMediaFile(this.app, buffer, this.settings.mediaSavePath, `Photo_${window.moment().format("YYYYMMDD_HHmmss")}.${ext}`);
-                        view.editor.replaceSelection(`\n![[${link}]]\n`);
-                    });
-                });
-            } else {
-                this.cameraRibbonEl.style.display = '';
-            }
-            
-            if (!this.tlcRibbonEl) {
-                this.tlcRibbonEl = this.addRibbonIcon('image-file', 'Add TLC Plate', () => {
-                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                    if (!view) { new Notice("Place cursor in a Markdown file first."); return; }
-                    new TlcModal(this.app, async (pngData, rfData) => {
-                        const link = await saveMediaFile(this.app, pngData, this.settings.mediaSavePath, `TLC_${window.moment().format("YYYYMMDD_HHmmss")}.png`);
-                        let md = `\n![[${link}]]\n\n| Spot | $R_f$ |\n|---|---|\n`;
-                        rfData.forEach((s, i) => md += `| ${i+1} | **${s.rf.toFixed(2)}** |\n`);
-                        view.editor.replaceSelection(md);
-                    }).open();
-                });
-            } else {
-                this.tlcRibbonEl.style.display = '';
-            }
-        } else {
-            if (this.cameraRibbonEl) this.cameraRibbonEl.style.display = 'none';
-            if (this.tlcRibbonEl) this.tlcRibbonEl.style.display = 'none';
-        }
     }
 
     createBaseWrapper(titleText: string): HTMLDivElement {
@@ -775,6 +810,35 @@ export default class ChemEditPlugin extends Plugin {
             }
         }).open();
     }
+	
+    // Helper function so SharedEln can open the editor
+    openKetcherModal(initialData: string, format: string, onSave: (data: string) => void) {
+        new KetcherModal(this, initialData, format, (newData, isFile, newFormat) => {
+            onSave(newData);
+        }).open();
+    }
+    
+	openKetcherForFile(file: TFile, data: string, format: string, previewWrapper: HTMLElement) {
+        new KetcherModal(this, data, format, async (newData, isFile, newFormat) => {
+            await this.app.vault.modify(file, newData);
+            new Notice(`Saved ${file.name}`);
+            
+            // Force preview image to refresh on the card!
+            previewWrapper.innerHTML = `<span class="color-text-muted" style="font-size:12px;">⏳</span>`;
+            const originalW = this.settings.width; const originalH = this.settings.height;
+            this.settings.width = 120; this.settings.height = 100;
+            
+            const updatedPreview = await this.renderMoleculeToPreview(newData, newFormat || format, false);
+            
+            this.settings.width = originalW; this.settings.height = originalH;
+            
+            if (updatedPreview) {
+                previewWrapper.empty();
+                updatedPreview.style.maxWidth = '100%'; updatedPreview.style.maxHeight = '100%';
+                previewWrapper.appendChild(updatedPreview);
+            }
+        }).open();
+    }
 
     insertSmilesAtCursor(editor: Editor, data: string, format: string) {
         const cursor = editor.getCursor();
@@ -870,29 +934,115 @@ export default class ChemEditPlugin extends Plugin {
 
     buildLivePreviewPlugin() {
         const plugin = this;
+
+        // Custom Widget for Inline Rendering in Live Preview
+        class ChemInlineWidget extends WidgetType {
+            constructor(public data: string, public type: 'smiles'|'file', public plugin: ChemEditPlugin) { super(); }
+            
+            eq(other: ChemInlineWidget) { return this.data === other.data && this.type === other.type; }
+            
+            toDOM() {
+                const wrapper = document.createElement("span");
+                wrapper.className = "chem-inline-widget";
+                wrapper.style.display = "inline-block";
+                wrapper.style.verticalAlign = "middle";
+                wrapper.style.cursor = "pointer";
+                wrapper.style.margin = "0 4px";
+                wrapper.innerHTML = `⏳`;
+
+                requestAnimationFrame(async () => {
+                    if (this.type === 'smiles') {
+                        const el = await plugin.renderMoleculeToPreview(this.data, 'smiles', true);
+                        wrapper.empty();
+                        if (el) wrapper.appendChild(el); else wrapper.innerHTML = '❌';
+                    } else {
+                        const cleanName = this.data.replace('[[', '').replace(']]', '');
+                        const file = plugin.app.metadataCache.getFirstLinkpathDest(cleanName, "");
+                        if (file && file instanceof TFile) {
+                            const format = file.extension.toLowerCase();
+                            const fileData = await plugin.app.vault.read(file);
+                            const el = await plugin.renderMoleculeToPreview(fileData, format, true);
+                            wrapper.empty();
+                            if (el) wrapper.appendChild(el); else wrapper.innerHTML = '❌';
+                        } else {
+                            wrapper.innerHTML = '❌';
+                        }
+                    }
+                });
+
+                return wrapper;
+            }
+        }
+
         return ViewPlugin.fromClass(class {
-            constructor(public view: EditorView) {
-                this.processEmbeds();
+            decorations: DecorationSet;
+            constructor(view: EditorView) {
+                this.decorations = this.buildDecorations(view);
+                this.processEmbeds(view);
             }
             update(update: ViewUpdate) {
-                if (update.docChanged || update.viewportChanged) {
-                    setTimeout(() => this.processEmbeds(), 50);
+                if (update.docChanged || update.viewportChanged || update.selectionSet) {
+                    this.decorations = this.buildDecorations(update.view);
+                    setTimeout(() => this.processEmbeds(update.view), 50);
                 }
             }
-            processEmbeds() {
-                const embeds = this.view.dom.querySelectorAll('.internal-embed');
+            buildDecorations(view: EditorView) {
+                const builder = new RangeSetBuilder<Decoration>();
+                const prefixSmiles = plugin.settings.inlineSmilesPrefix;
+                const prefixMol = plugin.settings.inlineMolPrefix;
+                
+                if (!prefixSmiles && !prefixMol) return builder.finish();
+
+                for (let {from, to} of view.visibleRanges) {
+                    const text = view.state.doc.sliceString(from, to);
+                    let match;
+                    
+                    const escapeRegex = (s: string) => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                    
+                    const regexSrc = [];
+                    if (prefixSmiles) regexSrc.push(`(?:${escapeRegex(prefixSmiles)}[^\\s]+)`);
+                    if (prefixMol)    regexSrc.push(`(?:${escapeRegex(prefixMol)}[^\\s]+)`);
+                    const regex = new RegExp(regexSrc.join('|'), 'g');
+                    
+                    while ((match = regex.exec(text)) !== null) {
+                        const start = from + match.index;
+                        const end = start + match[0].length;
+                        
+                        // Prevent decorating if cursor is touching/inside the match so user can edit text natively
+                        const hasCursorInside = view.state.selection.ranges.some(r => r.from >= start && r.to <= end);
+                        if (hasCursorInside) continue;
+
+                        const isSmiles = prefixSmiles && match[0].startsWith(prefixSmiles);
+                        const prefixLen = isSmiles ? prefixSmiles.length : prefixMol.length;
+                        const data = match[0].substring(prefixLen);
+                        
+                        builder.add(start, end, Decoration.replace({
+                            widget: new ChemInlineWidget(data, isSmiles ? 'smiles' : 'file', plugin)
+                        }));
+                    }
+                }
+                return builder.finish();
+            }
+            processEmbeds(view: EditorView) {
+                const embeds = view.dom.querySelectorAll('.internal-embed');
+                const activeExts = plugin.getSupportedExts();
+
                 embeds.forEach(embed => {
                     const src = embed.getAttribute('src');
                     if (!src) return;
                     
                     const lowerSrc = src.toLowerCase();
-                    if (lowerSrc.endsWith('.mol') || lowerSrc.endsWith('.cdxml') || lowerSrc.endsWith('.ket') || lowerSrc.endsWith('.sdf') || lowerSrc.endsWith('.rxn')) {
+                    const hasExt = activeExts.some(ext => lowerSrc.endsWith(`.${ext}`));
+                    
+                    if (hasExt) {
                         if (embed.hasAttribute('data-chem-preview-done')) return;
                         embed.setAttribute('data-chem-preview-done', 'true');
                         plugin.injectNativeEmbed(embed as HTMLElement, src, "");
                     }
                 });
             }
+        }, {
+            decorations: v => v.decorations
         });
     }
 	
@@ -1411,6 +1561,42 @@ class ChemEditSettingTab extends PluginSettingTab {
                     this.plugin.settings.mediaSavePath = v;
                     await this.plugin.saveSettings();
                 }));
+		
+		new Setting(containerEl)
+            .setName('Show Blank ELN Icon')
+            .setDesc('Display the Flask icon in the sidebar to generate blank experiments.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.showElnRibbonIcon)
+                .onChange(async (value) => {
+                    this.plugin.settings.showElnRibbonIcon = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.refreshRibbonIcons();
+                }));
+
+        new Setting(containerEl)
+            .setName('Default ELN Directory')
+            .setDesc('Folder where new ELN experiments will be saved by default (e.g. Experiments/). Leave blank to save in the current active folder.')
+            .addText(text => text
+                .setPlaceholder('Experiments/')
+                .setValue(this.plugin.settings.elnDirectory)
+                .onChange(async (v) => { this.plugin.settings.elnDirectory = v; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl)
+            .setName('Default Experiment Prefix')
+            .setDesc('Prefix for new ELN files (e.g., EXP, JH, CHEM).')
+            .addText(text => text
+                .setPlaceholder('EXP')
+                .setValue(this.plugin.settings.elnPrefix)
+                .onChange(async (v) => { this.plugin.settings.elnPrefix = v; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl)
+            .setName('Analytical Sections')
+            .setDesc('Comma-separated list of sections to auto-generate inside new experiments.')
+            .addText(text => text
+                .setPlaceholder('TLC, LCMS, NMR')
+                .setValue(this.plugin.settings.elnSections)
+                .onChange(async (v) => { this.plugin.settings.elnSections = v; await this.plugin.saveSettings(); }));
+
 
         containerEl.createEl('h3', { text: 'Smart Paste Behavior' });
 
@@ -1436,6 +1622,17 @@ class ChemEditSettingTab extends PluginSettingTab {
 				
         containerEl.createEl('br');
         containerEl.createEl('h3', { text: 'Block Embeds' });
+        
+        new Setting(containerEl)
+            .setName('Supported File Extensions')
+            .setDesc('Comma-separated list of extensions that should render chemical views automatically via ![[file.ext]] embeds.')
+            .addText(text => text
+                .setPlaceholder('mol, cdxml, ket, sdf, rxn, inchi, smarts')
+                .setValue(this.plugin.settings.supportedEmbedExtensions)
+                .onChange(async (v) => {
+                    this.plugin.settings.supportedEmbedExtensions = v;
+                    await this.plugin.saveSettings();
+                }));
 
         new Setting(containerEl)
             .setName('Image Width')
@@ -1450,8 +1647,8 @@ class ChemEditSettingTab extends PluginSettingTab {
                 .onChange(async (v) => { this.plugin.settings.height = parseInt(v) || 300; await this.plugin.saveSettings(); }));
 
         new Setting(containerEl)
-            .setName('Render SMILES as SVG (Experimental)')
-            .setDesc('Uses SVG instead of High-DPI Canvas for SMILES blocks. Looks crisper at extreme zoom levels, but might mislabel atoms (O to C) due to known bugs in the library.')
+            .setName('Render SMILES as SVG')
+            .setDesc('Uses SVG instead of High-DPI Canvas for SMILES blocks. Looks crisper at extreme zoom levels.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.useSvgSmiles)
                 .onChange(async (value) => {
