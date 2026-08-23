@@ -21,10 +21,19 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 - **Macros Menu:** Instantly drop timestamps or boilerplate text (like aqueous workups and column chromatography procedures) into your markdown via the ⚡ Macros button.
 
 **🖼️ Dynamic Galleries & Embeds**
-- **Gallery Grids:** Type ````chem-gallery path: Folder/```` or ````eln-gallery path: Folder/```` to render beautiful, searchable grids of your structures and past experiments.
+- **Gallery Grids:** Type ````chem-gallery path: Folder/```` or ````eln-gallery path: Folder/```` to render beautiful, searchable grids of your structures and past experiments. 
+<img width="855" height="431" alt="Image" src="https://github.com/user-attachments/assets/539ccf54-1978-47c1-9318-6bf4974eb03e" />
 
+## 🚀 What's New in ChemEdit 1.3.2
 
-<video src="https://github.com/user-attachments/assets/e215352a-7717-4c9a-bf95-c134b9a81ecd" controls width="800"></video>
+### ChemEdit now supports viewing and editing biological sequences via Ketcher's macromolecule mode.
+-   **Explanation:** Native codeblock and file support for DNA, RNA, and Peptides.
+-   **Examples:** You can now use ````fasta````, ````helm````, ````idt````, ````sequence````, and ````biln```` codeblocks. 
+*(Note: Ketcher's biological parser is still in active upstream development, so highly complex sequences may fall back to default structural representations).*
+### Ketcher SVGs support
+SVGs that act as standard images but contain editable chemical data.
+-   **Example:** `![[aspirin.svg]]` renders anywhere in your vault and can be open in other programs as normal svg. Right-click the file in Obsidian to see the new **"Edit SVG in Ketcher"** option.
+
 
 ## ✨ Features
 
