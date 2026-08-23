@@ -33,6 +33,9 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 ### Ketcher SVGs support
 SVGs that act as standard images but contain editable chemical data.
 -   **Example:** `![[aspirin.svg]]` renders anywhere in your vault and can be open in other programs as normal svg. Right-click the file in Obsidian to see the new **"Edit SVG in Ketcher"** option.
+<img width="667" height="573" alt="image" src="https://github.com/user-attachments/assets/a6df57a9-b372-488b-a08b-c502560a25ef" />
+<img width="404" height="802" alt="image" src="https://github.com/user-attachments/assets/72716785-75ac-4172-9b36-5048e2b93a53" />
+<img width="493" height="680" alt="image" src="https://github.com/user-attachments/assets/f66f5b70-d103-41ed-8a6c-75c50b7a4bc2" />
 
 
 ## ✨ Features
