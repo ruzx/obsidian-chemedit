@@ -25,6 +25,34 @@ try {
 
 let standaloneProvider: StandaloneStructServiceProvider | null = null;
 
+// --- KETCHER SVG HELPERS ---
+export function embedDataInSvg(svgStr: string, data: string, format: string): string {
+    try {
+        const base64Data = btoa(unescape(encodeURIComponent(data)));
+        const injection = `\n<desc id="ketcher-data" data-format="${format}">${base64Data}</desc>\n`;
+        if (svgStr.includes('id="ketcher-data"')) {
+            return svgStr.replace(/<desc id="ketcher-data"[^>]*>.*?<\/desc>/is, injection);
+        }
+        return svgStr.replace(/(<svg[^>]*>)/i, `$1${injection}`);
+    } catch (e) {
+        console.error("Failed to embed data in SVG", e);
+        return svgStr;
+    }
+}
+
+export function extractDataFromSvg(svgStr: string): { format: string, data: string } | null {
+    const match = svgStr.match(/<desc id="ketcher-data" data-format="([^"]+)">([\s\S]*?)<\/desc>/i);
+    if (match) {
+        try {
+            return { format: match[1], data: decodeURIComponent(escape(atob(match[2].trim()))) };
+        } catch (e) {
+            console.error("Failed to parse embedded SVG data", e);
+            return null;
+        }
+    }
+    return null;
+}
+
 interface ChemEditSettings {
     width: number;
     height: number;
@@ -37,6 +65,7 @@ interface ChemEditSettings {
     smartPasteSmiles: boolean;
     smartPasteMol: boolean;
     useSvgSmiles: boolean;
+    useAcsSettings: boolean;
     mediaSavePath: string;
     showMediaRibbonIcons: boolean; 
     showElnRibbonIcon: boolean;
@@ -57,14 +86,15 @@ const DEFAULT_SETTINGS: ChemEditSettings = {
     inlineMolPrefix: '$mol=',
     smartPasteSmiles: false,
     smartPasteMol: false,
-    useSvgSmiles: true, // Now defaults to true
+    useSvgSmiles: true, 
+    useAcsSettings: false,
     mediaSavePath: "Assets/",
     showMediaRibbonIcons: false, 
     showElnRibbonIcon: true,
     elnDirectory: "",
     elnPrefix: "EXP",
     elnSections: "TLC, LCMS, NMR",
-    supportedEmbedExtensions: "mol, cdxml, ket, sdf, rxn, inchi, smarts"
+    supportedEmbedExtensions: "mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, sequence, idt, helm, biln"
 };
 
 export default class ChemEditPlugin extends Plugin {
@@ -81,13 +111,11 @@ export default class ChemEditPlugin extends Plugin {
     tlcRibbonEl: HTMLElement | null = null;
     elnRibbonEl: HTMLElement | null = null;
 
-    // Helper to get extensions as clean array
     getSupportedExts(): string[] {
         return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
     }
 
     refreshRibbonIcons() {
-        // 1. Handle Media Icons
         if (this.settings.showMediaRibbonIcons) {
             if (!this.cameraRibbonEl) {
                 this.cameraRibbonEl = this.addRibbonIcon('camera', 'Take Lab Photo', () => {
@@ -117,7 +145,6 @@ export default class ChemEditPlugin extends Plugin {
             if (this.tlcRibbonEl) this.tlcRibbonEl.style.display = 'none';
         }
 
-        // 2. Handle the Blank ELN Icon
         if (this.settings.showElnRibbonIcon) {
             if (!this.elnRibbonEl) {
                 this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
@@ -137,7 +164,6 @@ export default class ChemEditPlugin extends Plugin {
     }
 
     async onload() {
-        // Register custom Round Bottom Flask icon
         addIcon('flask-round', `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="5" d="M 42 35 L 42 55 A 18 18 0 1 0 58 55 L 58 35 Z" stroke-linejoin="round"/><line x1="36" y1="35" x2="64" y2="35" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><line x1="32" y1="65" x2="68" y2="65" stroke="currentColor" stroke-width="4" stroke-dasharray="4 4"/>`);
         
         await this.loadSettings();
@@ -156,24 +182,46 @@ export default class ChemEditPlugin extends Plugin {
             this.bootHeadlessKetcher();
         });
 
-        const exts = this.getSupportedExts();
+        const extsForView = this.getSupportedExts().filter(ext => ext !== 'svg');
         this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
-        this.registerExtensions(exts, "chem-file-view");
+        this.registerExtensions(extsForView, "chem-file-view");
+        
         this.registerEditorExtension(this.buildLivePreviewPlugin());
 		
-		// --- ELN GALLERY PROCESSOR ---
         this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => {
             const galleryRenderer = new ElnGalleryRenderer(this); 
             await galleryRenderer.renderGalleryBlock(source, el, ctx);
         });
 		
-        // Main Drawing Icon (Always visible)
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => {
             this.openNewDrawingModal();
         });
 
-        // Toggleable Media Icons
         this.refreshRibbonIcons();
+
+        // --- KETCHER SVG FILE EXPLORER CONTEXT MENU ---
+        this.registerEvent(
+            this.app.workspace.on('file-menu', (menu, file) => {
+                if (file instanceof TFile && file.extension.toLowerCase() === 'svg') {
+                    menu.addItem((item) => {
+                        item.setTitle("Edit SVG in Ketcher")
+                            .setIcon("hexagon")
+                            .onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const extracted = extractDataFromSvg(data);
+                                if (extracted) {
+                                    new KetcherModal(this, data, "svg", async (newData) => {
+                                        await this.app.vault.modify(file, newData);
+                                        new Notice(`Saved ${file.name}`);
+                                    }).open();
+                                } else {
+                                    new Notice("This SVG does not contain editable Ketcher metadata.");
+                                }
+                            });
+                    });
+                }
+            })
+        );
 
         // --- COMMANDS ---
         this.addCommand({
@@ -309,7 +357,6 @@ export default class ChemEditPlugin extends Plugin {
             }
         });
 
-        // --- MODULAR ELN BLOCK PROCESSOR ---
         this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
             const elnRenderer = new SharedElnRenderer(this); 
             const wrapper = await elnRenderer.renderElnBlock(source, el, ctx);
@@ -369,13 +416,11 @@ export default class ChemEditPlugin extends Plugin {
             el.appendChild(wrapper);
         });
 
-        // --- MODULAR GALLERY PROCESSOR ---
         this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => {
             const galleryRenderer = new SharedGalleryRenderer(this);
             await galleryRenderer.renderGalleryBlock(source, el, ctx);
         });
 
-        // --- FILE EMBED PROCESSOR ---
         const fileCodeblockProcessor = async (source: string, el: HTMLElement, ctx: any, defaultFormat: string) => {
             const wrapper = this.createBaseWrapper(`Loading preview...`);
             el.appendChild(wrapper);
@@ -398,31 +443,56 @@ export default class ChemEditPlugin extends Plugin {
                 
                 if (file && file instanceof TFile) {
                     const format = file.extension.toLowerCase();
-                    wrapper.title = `Double-click to edit ${file.name}`;
+                    const fileData = await this.app.vault.read(file);
                     
-                    const data = await this.app.vault.read(file);
-                    const previewEl = await this.renderMoleculeToPreview(data, format, false);
+                    let dataForPreview = fileData;
+                    let formatForPreview = format;
 
-                    wrapper.empty(); // Clears "Loading preview..."
-                    if (previewEl) wrapper.appendChild(previewEl);
-                    else wrapper.appendChild(this.createErrorCard(`Invalid format in ${file.name}`));
+                    if (format === 'svg') {
+                        const extracted = extractDataFromSvg(fileData);
+                        if (extracted) {
+                            wrapper.title = `Double-click to edit ${file.name}`;
+                            wrapper.empty();
+                            const svgContainer = document.createElement("div");
+                            svgContainer.innerHTML = fileData;
+                            const svgNode = svgContainer.querySelector('svg');
+                            if (svgNode) { svgNode.style.width = '100%'; svgNode.style.height = '100%'; }
+                            wrapper.appendChild(svgContainer);
+                        } else {
+                            wrapper.innerHTML = `<span class="color-red">Not a Ketcher SVG</span>`;
+                            return; 
+                        }
+                    } else {
+                        wrapper.title = `Double-click to edit ${file.name}`;
+                        const previewEl = await this.renderMoleculeToPreview(fileData, format, false);
+                        wrapper.empty(); 
+                        if (previewEl) wrapper.appendChild(previewEl);
+                        else wrapper.appendChild(this.createErrorCard(`Invalid format in ${file.name}`));
+                    }
 
                     wrapper.addEventListener("dblclick", async (e) => {
                         e.stopPropagation();
                         const freshData = await this.app.vault.read(file);
                         new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
                             if (isFile) {
-                                new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
+                                new Notice(`Saved as new file: ${newData}. Please update the link.`);
                                 return;
-                            }
-                            if (newFormat && newFormat !== format) {
-                                new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
                             }
                             await this.app.vault.modify(file, newData);
                             wrapper.innerHTML = `<span class="color-text-muted">Updating...</span>`;
-                            const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
-                            if (updatedEl) {
-                                wrapper.empty(); wrapper.appendChild(updatedEl);
+                            
+                            if (format === 'svg') {
+                                wrapper.empty();
+                                const svgContainer = document.createElement("div");
+                                svgContainer.innerHTML = newData;
+                                const svgNode = svgContainer.querySelector('svg');
+                                if (svgNode) { svgNode.style.width = '100%'; svgNode.style.height = '100%'; }
+                                wrapper.appendChild(svgContainer);
+                            } else {
+                                const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
+                                if (updatedEl) {
+                                    wrapper.empty(); wrapper.appendChild(updatedEl);
+                                }
                             }
                         }).open();
                     });
@@ -441,7 +511,7 @@ export default class ChemEditPlugin extends Plugin {
             
             requestAnimationFrame(async () => {
                 const previewEl = await this.renderMoleculeToPreview(source, defaultFormat, false);
-                wrapper.empty(); // Clears "Loading preview..."
+                wrapper.empty(); 
                 if (previewEl) wrapper.appendChild(previewEl);
                 else wrapper.appendChild(this.createErrorCard("Invalid chemical format"));
             });
@@ -470,11 +540,16 @@ export default class ChemEditPlugin extends Plugin {
             });
         };
 
-        this.getSupportedExts().forEach(fmt => {
-            this.registerMarkdownCodeBlockProcessor(fmt, (s, e, c) => fileCodeblockProcessor(s, e, c, fmt));
+        // Guarantee that ALL supported formats register as code blocks
+        const builtInCodeblocks = ["mol", "cdxml", "ket", "sdf", "rxn", "inchi", "smarts", "fasta", "sequence", "idt", "helm", "biln"];
+        const allCodeblocks = [...new Set([...builtInCodeblocks, ...this.getSupportedExts()])];
+
+        allCodeblocks.forEach(fmt => {
+            if (fmt !== 'svg') {
+                this.registerMarkdownCodeBlockProcessor(fmt, (s, e, c) => fileCodeblockProcessor(s, e, c, fmt));
+            }
         });
 
-        // --- SMILES CODEBLOCK PROCESSOR ---
         this.registerMarkdownCodeBlockProcessor("smiles", (source, el, ctx) => {
             const cleanSmiles = source.trim();
             const wrapper = document.createElement("div");
@@ -596,8 +671,11 @@ export default class ChemEditPlugin extends Plugin {
 
         const element = React.createElement(KetcherReact, {
             data: "C", 
-            onInit: (ketcher: any) => {
+            onInit: async (ketcher: any) => {
                 this.headlessKetcher = ketcher;
+                if (this.settings.useAcsSettings) {
+                    try { await ketcher.setSettings({ bondThickness: 1.2, bondLength: 20, stereoBondWidth: 3, fontsz: 10, fontszsub: 7, hashSpacing: 1.5 }); } catch (e) {}
+                }
                 setTimeout(() => this.processHeadlessQueue(), 500);
             },
             onChange: () => {}
@@ -756,20 +834,39 @@ export default class ChemEditPlugin extends Plugin {
                 wrapper.addEventListener("dblclick", async (e) => {
                     e.stopPropagation();
                     const freshData = await this.app.vault.read(file);
-                    new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
+                    
+                    let openData = freshData;
+                    let openFormat = format;
+                    if (format === 'svg') {
+                        const ex = extractDataFromSvg(freshData);
+                        if (ex) { openData = ex.data; openFormat = ex.format; }
+                        else { new Notice("Not a Ketcher SVG"); return; }
+                    }
+
+                    new KetcherModal(this, openData, openFormat, async (newData, isFile, newFormat) => {
                         if (isFile) {
                             new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
                             return;
                         }
-                        if (newFormat && newFormat !== format) {
+                        if (newFormat && newFormat !== format && format !== 'svg') {
                             new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
                         }
                         await this.app.vault.modify(file, newData);
                         wrapper.innerHTML = `⏳`;
-                        const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, true);
-                        if (updatedEl) {
+                        
+                        if (format === 'svg') {
                             wrapper.innerHTML = '';
-                            wrapper.appendChild(updatedEl);
+                            const svgContainer = document.createElement("div");
+                            svgContainer.innerHTML = newData;
+                            const svgNode = svgContainer.querySelector('svg');
+                            if (svgNode) { svgNode.style.width = '100%'; svgNode.style.height = '100%'; }
+                            wrapper.appendChild(svgContainer);
+                        } else {
+                            const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, true);
+                            if (updatedEl) {
+                                wrapper.innerHTML = '';
+                                wrapper.appendChild(updatedEl);
+                            }
                         }
                     }).open();
                 });
@@ -811,7 +908,6 @@ export default class ChemEditPlugin extends Plugin {
         }).open();
     }
 	
-    // Helper function so SharedEln can open the editor
     openKetcherModal(initialData: string, format: string, onSave: (data: string) => void) {
         new KetcherModal(this, initialData, format, (newData, isFile, newFormat) => {
             onSave(newData);
@@ -819,23 +915,40 @@ export default class ChemEditPlugin extends Plugin {
     }
     
 	openKetcherForFile(file: TFile, data: string, format: string, previewWrapper: HTMLElement) {
-        new KetcherModal(this, data, format, async (newData, isFile, newFormat) => {
+        let openData = data;
+        let openFormat = format;
+        if (format === 'svg') {
+            const ex = extractDataFromSvg(data);
+            if (ex) { openData = ex.data; openFormat = ex.format; }
+            else { new Notice("Not a Ketcher SVG"); return; }
+        }
+
+        new KetcherModal(this, openData, openFormat, async (newData, isFile, newFormat) => {
             await this.app.vault.modify(file, newData);
             new Notice(`Saved ${file.name}`);
             
-            // Force preview image to refresh on the card!
             previewWrapper.innerHTML = `<span class="color-text-muted" style="font-size:12px;">⏳</span>`;
-            const originalW = this.settings.width; const originalH = this.settings.height;
-            this.settings.width = 120; this.settings.height = 100;
             
-            const updatedPreview = await this.renderMoleculeToPreview(newData, newFormat || format, false);
-            
-            this.settings.width = originalW; this.settings.height = originalH;
-            
-            if (updatedPreview) {
-                previewWrapper.empty();
-                updatedPreview.style.maxWidth = '100%'; updatedPreview.style.maxHeight = '100%';
-                previewWrapper.appendChild(updatedPreview);
+            if (format === 'svg') {
+                previewWrapper.innerHTML = '';
+                const svgContainer = document.createElement("div");
+                svgContainer.innerHTML = newData;
+                const svgNode = svgContainer.querySelector('svg');
+                if (svgNode) { svgNode.style.width = '100%'; svgNode.style.height = '100%'; }
+                previewWrapper.appendChild(svgContainer);
+            } else {
+                const originalW = this.settings.width; const originalH = this.settings.height;
+                this.settings.width = 120; this.settings.height = 100;
+                
+                const updatedPreview = await this.renderMoleculeToPreview(newData, newFormat || format, false);
+                
+                this.settings.width = originalW; this.settings.height = originalH;
+                
+                if (updatedPreview) {
+                    previewWrapper.empty();
+                    updatedPreview.style.maxWidth = '100%'; updatedPreview.style.maxHeight = '100%';
+                    previewWrapper.appendChild(updatedPreview);
+                }
             }
         }).open();
     }
@@ -852,6 +965,15 @@ export default class ChemEditPlugin extends Plugin {
         if (!(file instanceof TFile)) {
             embed.innerHTML = `<div class="chem-native-embed-wrapper color-red">File not found: ${src}</div>`;
             return;
+        }
+
+        const format = file.extension.toLowerCase();
+        const fileData = await this.app.vault.read(file);
+
+        let extractedSvgData = null;
+        if (format === 'svg') {
+            extractedSvgData = extractDataFromSvg(fileData);
+            if (!extractedSvgData) return; 
         }
 
         embed.classList.add('chem-custom-embed');
@@ -883,11 +1005,20 @@ export default class ChemEditPlugin extends Plugin {
         });
         observer.observe(embed, { childList: true });
 
-        const format = file.extension.toLowerCase();
-        const fileData = await this.app.vault.read(file);
-
         requestAnimationFrame(async () => {
-            const previewEl = await this.renderMoleculeToPreview(fileData, format, false); 
+            let previewEl: HTMLElement | null = null;
+            if (format === 'svg') {
+                previewEl = document.createElement("div");
+                previewEl.innerHTML = fileData;
+                const svgNode = previewEl.querySelector('svg');
+                if (svgNode) {
+                    svgNode.style.width = '100%';
+                    svgNode.style.height = '100%';
+                }
+            } else {
+                previewEl = await this.renderMoleculeToPreview(fileData, format, false); 
+            }
+
             if (previewEl) {
                 wrapper.empty();
                 previewEl.style.border = "1px solid var(--background-modifier-border)";
@@ -907,26 +1038,51 @@ export default class ChemEditPlugin extends Plugin {
             
             const freshData = await this.app.vault.read(file);
             
-            new KetcherModal(this, freshData, format, async (newData, isFile, newFormat) => {
+            let openData = freshData;
+            let openFormat = format;
+
+            if (format === 'svg' && extractedSvgData) {
+                openData = extractedSvgData.data;
+                openFormat = 'svg'; 
+            }
+
+            new KetcherModal(this, openData, openFormat, async (newData, isFile, newFormat) => {
                 if (isFile) {
                     new Notice(`Saved as new file: ${newData}. Please manually update the link in your document.`);
                     return;
                 }
-                if (newFormat && newFormat !== format) {
+                if (newFormat && newFormat !== format && format !== 'svg') {
                     new Notice(`Format upgraded to ${newFormat}. Remember to rename your inline file.`);
                 }
                 await this.app.vault.modify(file, newData);
                 
                 wrapper.innerHTML = `<div class="color-text-muted" style="padding:15px; border:1px solid var(--background-modifier-border); border-radius:8px;">⏳ Updating...</div>`;
-                const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
                 
-                if (updatedEl) { 
+                if (format === 'svg') {
                     wrapper.empty();
-                    updatedEl.style.border = "1px solid var(--background-modifier-border)";
-                    updatedEl.style.borderRadius = "8px";
-                    updatedEl.style.padding = "10px";
-                    updatedEl.style.backgroundColor = "var(--background-primary)";
-                    wrapper.appendChild(updatedEl);
+                    const svgContainer = document.createElement("div");
+                    svgContainer.innerHTML = newData;
+                    const svgNode = svgContainer.querySelector('svg');
+                    if (svgNode) {
+                        svgNode.style.width = '100%';
+                        svgNode.style.height = '100%';
+                    }
+                    svgContainer.style.border = "1px solid var(--background-modifier-border)";
+                    svgContainer.style.borderRadius = "8px";
+                    svgContainer.style.padding = "10px";
+                    svgContainer.style.backgroundColor = "var(--background-primary)";
+                    wrapper.appendChild(svgContainer);
+                } else {
+                    const updatedEl = await this.renderMoleculeToPreview(newData, newFormat || format, false);
+                    
+                    if (updatedEl) { 
+                        wrapper.empty();
+                        updatedEl.style.border = "1px solid var(--background-modifier-border)";
+                        updatedEl.style.borderRadius = "8px";
+                        updatedEl.style.padding = "10px";
+                        updatedEl.style.backgroundColor = "var(--background-primary)";
+                        wrapper.appendChild(updatedEl);
+                    }
                 }
             }).open();
         });
@@ -935,7 +1091,6 @@ export default class ChemEditPlugin extends Plugin {
     buildLivePreviewPlugin() {
         const plugin = this;
 
-        // Custom Widget for Inline Rendering in Live Preview
         class ChemInlineWidget extends WidgetType {
             constructor(public data: string, public type: 'smiles'|'file', public plugin: ChemEditPlugin) { super(); }
             
@@ -961,6 +1116,23 @@ export default class ChemEditPlugin extends Plugin {
                         if (file && file instanceof TFile) {
                             const format = file.extension.toLowerCase();
                             const fileData = await plugin.app.vault.read(file);
+                            
+                            if (format === 'svg') {
+                                const extracted = extractDataFromSvg(fileData);
+                                if (extracted) {
+                                    wrapper.empty();
+                                    const svgContainer = document.createElement("span");
+                                    svgContainer.innerHTML = fileData;
+                                    const svgNode = svgContainer.querySelector('svg');
+                                    if (svgNode) { 
+                                        svgNode.style.width = `${plugin.settings.inlineWidth}px`; 
+                                        svgNode.style.height = `${plugin.settings.inlineHeight}px`; 
+                                    }
+                                    wrapper.appendChild(svgContainer);
+                                    return;
+                                } else { wrapper.innerHTML = '❌'; return; }
+                            }
+
                             const el = await plugin.renderMoleculeToPreview(fileData, format, true);
                             wrapper.empty();
                             if (el) wrapper.appendChild(el); else wrapper.innerHTML = '❌';
@@ -1008,7 +1180,6 @@ export default class ChemEditPlugin extends Plugin {
                         const start = from + match.index;
                         const end = start + match[0].length;
                         
-                        // Prevent decorating if cursor is touching/inside the match so user can edit text natively
                         const hasCursorInside = view.state.selection.ranges.some(r => r.from >= start && r.to <= end);
                         if (hasCursorInside) continue;
 
@@ -1105,7 +1276,7 @@ export default class ChemEditPlugin extends Plugin {
                         return canvas;
                     }
                 }
-            } else if (['mol', 'cdxml', 'sdf', 'rxn', 'rdf', 'cml', 'ket', 'inchi', 'smarts'].includes(normalizedFormat)) {
+            } else if (['mol', 'cdxml', 'sdf', 'rxn', 'rdf', 'cml', 'ket', 'inchi', 'smarts', 'fasta', 'sequence', 'idt', 'helm', 'biln'].includes(normalizedFormat)) {
                 return new Promise((resolve) => {
                     this.headlessQueue.push({ data: cleanData, isInline, resolve });
                     this.processHeadlessQueue();
@@ -1308,6 +1479,13 @@ class KetcherModal extends Modal {
 
         const { contentEl } = this;
         contentEl.empty();
+
+        if (this.format === 'svg') {
+            const ex = extractDataFromSvg(this.initialData);
+            if (ex) {
+                this.initialData = ex.data;
+            }
+        }
         
         this.modalEl.style.width = "85vw";
         this.modalEl.style.height = "85vh";
@@ -1323,8 +1501,11 @@ class KetcherModal extends Modal {
 
         const element = React.createElement(KetcherReact, {
             data: this.initialData,
-            onInit: (ketcher: any) => {
+            onInit: async (ketcher: any) => {
                 this.ketcherInstance = ketcher;
+                if (this.plugin.settings.useAcsSettings) {
+                    try { await ketcher.setSettings({ bondThickness: 1.2, bondLength: 20, stereoBondWidth: 3, fontsz: 10, fontszsub: 7, hashSpacing: 1.5 }); } catch (e) {}
+                }
             },
             onChange: () => {}
         });
@@ -1355,9 +1536,28 @@ class KetcherModal extends Modal {
             try {
                 let resultData = "";
                 let finalFormat = formatToGet.toLowerCase();
+                const isPolyglotSvg = finalFormat === 'svg' || finalFormat === 'ketcher.svg';
                 
                 try {
-                    if (finalFormat === "smiles") {
+                    if (isPolyglotSvg) {
+                        const ket = await this.ketcherInstance.getKet();
+                        let svgText = "";
+                        try {
+                            const img = await this.ketcherInstance.generateImage(ket, { outputFormat: 'svg' });
+                            if (typeof img === 'string') {
+                                if (img.startsWith('data:image/svg+xml;base64,')) svgText = atob(img.split(',')[1]);
+                                else if (img.startsWith('data:image/svg+xml;utf8,')) svgText = decodeURIComponent(img.split(',')[1]);
+                                else svgText = img;
+                            } else if (img instanceof Blob) {
+                                svgText = await img.text();
+                            }
+                            resultData = embedDataInSvg(svgText, ket, 'ket');
+                            finalFormat = 'svg'; 
+                        } catch(e) {
+                            new Notice("Failed to generate SVG");
+                            return;
+                        }
+                    } else if (finalFormat === "smiles") {
                         resultData = await this.ketcherInstance.getSmiles();
                     } else if (finalFormat === "ket") {
                         resultData = await this.ketcherInstance.getKet(); 
@@ -1365,6 +1565,16 @@ class KetcherModal extends Modal {
                         resultData = await this.ketcherInstance.getInchi();
                     } else if (finalFormat === "smarts") {
                         resultData = await this.ketcherInstance.getSmarts();
+                    } else if (finalFormat === "fasta") {
+                        resultData = await this.ketcherInstance.getFasta();
+                    } else if (finalFormat === "sequence") {
+                        resultData = await this.ketcherInstance.getSequence();
+                    } else if (finalFormat === "idt") {
+                        resultData = await this.ketcherInstance.getIdt();
+                    } else if (finalFormat === "helm") {
+                        resultData = await this.ketcherInstance.getHelm();
+                    } else if (finalFormat === "biln") {
+                        resultData = typeof this.ketcherInstance.getBiln === "function" ? await this.ketcherInstance.getBiln() : await this.ketcherInstance.getMolfile();
                     } else if (finalFormat === "cdxml") {
                         if (typeof this.ketcherInstance.getCDXml === "function") {
                             resultData = await this.ketcherInstance.getCDXml();
@@ -1416,9 +1626,11 @@ class KetcherModal extends Modal {
         saveFileBtn.onclick = () => {
             new SaveFileModal(this.plugin.app, (filename, selectedFormat) => {
                 let safeName = filename.trim();
-                safeName = safeName.replace(/\.(mol|cdxml|ket|sdf|rxn)$/i, '');
+                safeName = safeName.replace(/\.(mol|cdxml|ket|sdf|rxn|svg|fasta|sequence|idt|helm|biln)$/i, '');
                 
-                safeName += '.' + selectedFormat;
+                const ext = selectedFormat === 'ketcher.svg' ? 'svg' : selectedFormat;
+                safeName += '.' + ext;
+                
                 this.isSavingAsFile = safeName;
                 doSave(selectedFormat);
             }).open();
@@ -1490,6 +1702,12 @@ class SaveFileModal extends Modal {
                 .addOption("ket", ".ket (Ketcher Native)")
                 .addOption("rxn", ".rxn (MDL Rxnfile)")
                 .addOption("sdf", ".sdf (Structure Data)")
+                .addOption("fasta", ".fasta (FASTA Sequence)")
+                .addOption("sequence", ".sequence (Raw Sequence)")
+                .addOption("idt", ".idt (IDT Sequence)")
+                .addOption("helm", ".helm (HELM Macromolecule)")
+                .addOption("biln", ".biln (BILN Macromolecule)")
+                .addOption("ketcher.svg", ".svg (Ketcher SVG)")
                 .setValue("mol")
                 .onChange(value => { this.format = value; })
             );
@@ -1627,10 +1845,20 @@ class ChemEditSettingTab extends PluginSettingTab {
             .setName('Supported File Extensions')
             .setDesc('Comma-separated list of extensions that should render chemical views automatically via ![[file.ext]] embeds.')
             .addText(text => text
-                .setPlaceholder('mol, cdxml, ket, sdf, rxn, inchi, smarts')
+                .setPlaceholder('mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, helm')
                 .setValue(this.plugin.settings.supportedEmbedExtensions)
                 .onChange(async (v) => {
                     this.plugin.settings.supportedEmbedExtensions = v;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('ChemDraw ACS 1996 Style (Ketcher)')
+            .setDesc('Applies the classic ACS Document 1996 drawing settings (bond lengths, fonts, thickness) to Ketcher editors and previews.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.useAcsSettings)
+                .onChange(async (value) => {
+                    this.plugin.settings.useAcsSettings = value;
                     await this.plugin.saveSettings();
                 }));
 
