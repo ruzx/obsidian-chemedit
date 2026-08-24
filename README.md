@@ -9,6 +9,14 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 <img width="800" height="874" alt="chemedit demo new" src="https://github.com/user-attachments/assets/9d282240-cb11-434c-a60f-466b912d9b04" />
 
+
+#### ELN Quick Demo
+
+
+<img width="800" height="900" alt="ELNquckdemo-ezgif com-optimize" src="https://github.com/user-attachments/assets/5a4a6d77-9652-4501-8ce9-5ff0cb226953" />
+
+
+
 ### 🚀 What's New in ChemEdit
 - **Interactive ELN Editor:** Added a floating action bar to ELN blocks. You can now visually edit Reactants, Products, Equivalents, and Procedures via a clean UI without touching Markdown YAML!
 - **🧪 Auto-Name Structures:** Added a smart "Auto-Name" button inside the ELN editor that automatically fetches IUPAC/Common names for your drawn structures via PubChem/CACTUS.
