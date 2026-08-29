@@ -1,4 +1,4 @@
-import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon } from 'obsidian';
+import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon, Menu } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
@@ -7,10 +7,9 @@ import KetcherReact from './KetcherReact';
 import { RangeSetBuilder } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate, WidgetType, Decoration, DecorationSet } from "@codemirror/view";
 
-// Modular Imports
-import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer } from './SharedEln';
+// Modular Imports (Safely interacting with your existing SharedEln.ts)
+import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer, getCompoundLibrary, CompoundSuggestModal, AddToLibraryModal, addCompoundToLibrary } from './SharedEln';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
-import { SharedGalleryRenderer } from './SharedGallery';
 
 // Safely handle React 18 root rendering
 let createRoot: any = null;
@@ -23,9 +22,6 @@ try {
     createRoot = null;
 }
 
-let standaloneProvider: StandaloneStructServiceProvider | null = null;
-
-// --- KETCHER SVG HELPERS ---
 export function embedDataInSvg(svgStr: string, data: string, format: string): string {
     try {
         const base64Data = btoa(unescape(encodeURIComponent(data)));
@@ -73,28 +69,26 @@ interface ChemEditSettings {
     elnPrefix: string;
     elnSections: string;
     supportedEmbedExtensions: string;
+    libraryFilePath: string; 
+    // Context Menu Custom Links
+    contextUrl1Name: string; contextUrl1: string;
+    contextUrl2Name: string; contextUrl2: string;
+    contextUrl3Name: string; contextUrl3: string;
+    contextUrl4Name: string; contextUrl4: string;
 }
 
 const DEFAULT_SETTINGS: ChemEditSettings = {
-    width: 300,
-    height: 300,
-    inlineWidth: 150,
-    inlineHeight: 150,
-    lightTheme: 'light',
-    darkTheme: 'dark',
-    inlineSmilesPrefix: '$smiles=',
-    inlineMolPrefix: '$mol=',
-    smartPasteSmiles: false,
-    smartPasteMol: false,
-    useSvgSmiles: true, 
-    useAcsSettings: false,
-    mediaSavePath: "Assets/",
-    showMediaRibbonIcons: false, 
-    showElnRibbonIcon: true,
-    elnDirectory: "",
-    elnPrefix: "EXP",
-    elnSections: "TLC, LCMS, NMR",
-    supportedEmbedExtensions: "mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, sequence, idt, helm, biln"
+    width: 300, height: 300, inlineWidth: 150, inlineHeight: 150, lightTheme: 'light', darkTheme: 'dark',
+    inlineSmilesPrefix: '$smiles=', inlineMolPrefix: '$mol=', smartPasteSmiles: false, smartPasteMol: false,
+    useSvgSmiles: true, useAcsSettings: false, mediaSavePath: "Assets/", showMediaRibbonIcons: false, 
+    showElnRibbonIcon: true, elnDirectory: "", elnPrefix: "EXP", elnSections: "TLC, LCMS, NMR",
+    supportedEmbedExtensions: "mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, sequence, idt, helm, biln",
+    libraryFilePath: "",
+    // Context Menu Defaults
+    contextUrl1Name: "Search PubChem", contextUrl1: "https://pubchem.ncbi.nlm.nih.gov/#query={{smiles}}",
+    contextUrl2Name: "Search MolPort", contextUrl2: "https://www.molport.com/shop/search-results?smiles={{smiles}}",
+    contextUrl3Name: "Predict NMR (NMRium)", contextUrl3: "https://app.nmrium.com/predict?smiles={{smiles}}",
+    contextUrl4Name: "Search ChemSpider", contextUrl4: "https://www.chemspider.com/Search.aspx?q={{smiles}}"
 };
 
 export default class ChemEditPlugin extends Plugin {
@@ -104,16 +98,129 @@ export default class ChemEditPlugin extends Plugin {
     headlessKetcher: any = null;
     headlessRoot: any = null; 
     isProcessingHeadless = false;
-    headlessQueue: { data: string, isInline: boolean, resolve: (el: HTMLElement | null) => void }[] = [];
+    headlessQueue: { data: string, isInline: boolean, resolve: (el: HTMLElement | null) => void, w?: number, h?: number }[] = [];
 
-    // Ribbon Icon References
     cameraRibbonEl: HTMLElement | null = null;
     tlcRibbonEl: HTMLElement | null = null;
     elnRibbonEl: HTMLElement | null = null;
 
-    getSupportedExts(): string[] {
-        return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
+    // --- CONTEXT MENU HELPER ---
+    showChemicalContextMenu(e: MouseEvent, smiles: string) {
+        e.preventDefault();
+        const menu = new Menu();
+        
+        menu.addItem((item) => {
+            item.setTitle("Add to Compound Library").setIcon("bookmark").onClick(() => {
+                new AddToLibraryModal(this.app, smiles, (name: string, sm: string) => { 
+                    addCompoundToLibrary(this, name, sm); 
+                }).open();
+            });
+        });
+
+        menu.addSeparator();
+
+        menu.addItem((item) => {
+            item.setTitle("Copy SMILES").setIcon("copy").onClick(async () => {
+                if (smiles) {
+                    await navigator.clipboard.writeText(smiles); 
+                    new Notice("SMILES copied to clipboard!");
+                }
+            });
+        });
+
+        menu.addItem((item) => {
+            item.setTitle("Copy MOL Block (Offline)").setIcon("file-text").onClick(async () => {
+                try {
+                    if (this.headlessKetcher) {
+                        await this.headlessKetcher.setMolecule(smiles);
+                        const molBlock = await this.headlessKetcher.getMolfile();
+                        if (molBlock && typeof molBlock === 'string') {
+                            await navigator.clipboard.writeText(molBlock);
+                            new Notice("MOL Block copied to clipboard!");
+                        }
+                    } else {
+                        new Notice("Ketcher engine loading, try again in a second.");
+                    }
+                } catch(err) { new Notice("Error generating MOL Block."); }
+            });
+        });
+
+        menu.addItem((item) => {
+            item.setTitle("Copy IUPAC Name (Web)").setIcon("whole-word").onClick(async () => {
+                try {
+                    new Notice("Fetching IUPAC name...");
+                    const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/IUPACName/JSON`);
+                    if (res.status === 200) { 
+                        const name = res.json?.PropertyTable?.Properties?.[0]?.IUPACName;
+                        if (name && typeof name === 'string') {
+                            await navigator.clipboard.writeText(name); 
+                            new Notice("IUPAC Name copied!"); 
+                        } else {
+                            new Notice("IUPAC Name not found.");
+                        }
+                    } else { new Notice("Failed to fetch IUPAC Name."); }
+                } catch(err) { new Notice("Error fetching IUPAC Name."); }
+            });
+        });
+
+        menu.addItem((item) => {
+            item.setTitle("Copy MW & Formula (Web)").setIcon("info").onClick(async () => {
+                try {
+                    const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`);
+                    if (res.status === 200) { 
+                        const p = res.json?.PropertyTable?.Properties?.[0];
+                        if (p && p.MolecularFormula && p.MolecularWeight) {
+                            await navigator.clipboard.writeText(`Formula: ${p.MolecularFormula}, MW: ${p.MolecularWeight}`); 
+                            new Notice("Properties copied!"); 
+                        } else {
+                            new Notice("Properties not found.");
+                        }
+                    }
+                } catch(err) { new Notice("Error fetching properties."); }
+            });
+        });
+
+        menu.addSeparator();
+
+        // Dynamically add custom URL links
+        const addCustomLink = (name: string, urlTemplate: string, icon: string) => {
+            if (!name || !urlTemplate) return;
+            menu.addItem((item) => {
+                item.setTitle(`${name} (Web)`).setIcon(icon).onClick(() => {
+                    const url = urlTemplate.replace(/\{\{smiles\}\}/gi, encodeURIComponent(smiles));
+                    window.open(url, '_blank');
+                });
+            });
+        };
+
+        addCustomLink(this.settings.contextUrl1Name, this.settings.contextUrl1, "search");
+        addCustomLink(this.settings.contextUrl2Name, this.settings.contextUrl2, "shopping-cart");
+        addCustomLink(this.settings.contextUrl3Name, this.settings.contextUrl3, "activity");
+        addCustomLink(this.settings.contextUrl4Name, this.settings.contextUrl4, "link");
+
+        menu.showAtMouseEvent(e);
     }
+
+    public openKetcherModal(initialData: string, format: string, onSave: (data: string) => void) {
+        new KetcherModal(this, initialData, format, (newData, isFile, newFormat) => {
+            onSave(newData);
+        }).open();
+    }
+
+    public api = {
+        openEditor: (initialData: string, format: string, onSave: (data: string) => void) => {
+            this.openKetcherModal(initialData, format, onSave);
+        },
+        renderStructure: async (data: string, width: number, height: number): Promise<HTMLElement | null> => {
+            const originalW = this.settings.width; const originalH = this.settings.height;
+            this.settings.width = width; this.settings.height = height;
+            const el = await this.renderMoleculeToPreview(data, 'smiles', false);
+            this.settings.width = originalW; this.settings.height = originalH;
+            return el;
+        }
+    };
+
+    getSupportedExts(): string[] { return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0); }
 
     refreshRibbonIcons() {
         if (this.settings.showMediaRibbonIcons) {
@@ -149,9 +256,21 @@ export default class ChemEditPlugin extends Plugin {
             if (!this.elnRibbonEl) {
                 this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
                     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                    const currentFolder = this.settings.elnDirectory ? this.settings.elnDirectory : (view?.file?.parent?.path || "");
+                    let currentFolder = this.settings.elnDirectory;
+                    if (!currentFolder && view && view.file && view.file.parent) {
+                        currentFolder = view.file.parent.path;
+                        if (currentFolder === "/") currentFolder = "";
+                    }
                     
-                    new CreateExperimentModal(this, this.settings.elnPrefix, async (expCode) => {
+                    let i = 1; let suggestedCode = this.settings.elnPrefix + "-001";
+                    while (true) {
+                        suggestedCode = `${this.settings.elnPrefix}-${i.toString().padStart(3, '0')}`;
+                        let testPath = currentFolder ? `${currentFolder}/${suggestedCode}.md` : `${suggestedCode}.md`;
+                        if (!this.app.vault.getAbstractFileByPath(testPath)) break;
+                        i++;
+                    }
+
+                    new CreateExperimentModal(this.app, suggestedCode, async (expCode) => {
                         await createNewElnExperiment(this.app, expCode, currentFolder, this.settings.elnSections);
                     }).open();
                 });
@@ -187,11 +306,6 @@ export default class ChemEditPlugin extends Plugin {
         this.registerExtensions(extsForView, "chem-file-view");
         
         this.registerEditorExtension(this.buildLivePreviewPlugin());
-		
-        this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => {
-            const galleryRenderer = new ElnGalleryRenderer(this); 
-            await galleryRenderer.renderGalleryBlock(source, el, ctx);
-        });
 		
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => {
             this.openNewDrawingModal();
@@ -263,6 +377,52 @@ export default class ChemEditPlugin extends Plugin {
             }
         });
 
+        this.addCommand({
+            id: 'insert-from-library',
+            name: 'Insert SMILES from Library',
+            editorCallback: async (editor: Editor) => {
+                const lib = await getCompoundLibrary(this);
+                new CompoundSuggestModal(this.app, lib, (selected) => {
+                    editor.replaceSelection(selected.smiles);
+                }).open();
+            }
+        });
+
+        this.addCommand({
+            id: 'edit-inline-molecule-at-cursor',
+            name: 'Edit inline molecule under cursor',
+            editorCallback: (editor: Editor) => {
+                const cursor = editor.getCursor();
+                const lineText = editor.getLine(cursor.line);
+                const prefix = this.settings.inlineSmilesPrefix;
+                
+                const startIndex = lineText.lastIndexOf(prefix, cursor.ch);
+                if (startIndex !== -1) {
+                    const searchArea = lineText.substring(startIndex + prefix.length);
+                    const match = searchArea.match(/[\s`'"]/);
+                    const endIndex = match ? startIndex + prefix.length + match.index : lineText.length;
+                    
+                    if (cursor.ch >= startIndex && cursor.ch <= endIndex) {
+                        const rawData = lineText.substring(startIndex + prefix.length, endIndex).trim();
+                        new KetcherModal(this, rawData, "smiles", (newData, isFile, newFormat) => {
+                            if (isFile) {
+                                editor.replaceRange(`!${newData}`, {line: cursor.line, ch: startIndex}, {line: cursor.line, ch: endIndex});
+                                return;
+                            }
+                            if (newFormat === "ket") {
+                                new Notice("Inline reactions not supported. Replaced with codeblock.");
+                                editor.replaceRange(`\n\`\`\`ket\n${newData}\n\`\`\`\n`, {line: cursor.line, ch: startIndex}, {line: cursor.line, ch: endIndex});
+                                return;
+                            }
+                            editor.replaceRange(newData, {line: cursor.line, ch: startIndex + prefix.length}, {line: cursor.line, ch: endIndex});
+                        }).open();
+                        return;
+                    }
+                }
+                new Notice("Place your cursor inside an inline $smiles= string first!");
+            }
+        });
+
         // --- POST PROCESSORS ---
         this.registerMarkdownPostProcessor(async (el, ctx) => {
             const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
@@ -322,50 +482,18 @@ export default class ChemEditPlugin extends Plugin {
             })
         );
 
-        this.addCommand({
-            id: 'edit-inline-molecule-at-cursor',
-            name: 'Edit inline molecule under cursor',
-            editorCallback: (editor: Editor) => {
-                const cursor = editor.getCursor();
-                const lineText = editor.getLine(cursor.line);
-                const prefix = this.settings.inlineSmilesPrefix;
-                
-                const startIndex = lineText.lastIndexOf(prefix, cursor.ch);
-                if (startIndex !== -1) {
-                    const searchArea = lineText.substring(startIndex + prefix.length);
-                    const match = searchArea.match(/[\s`'"]/);
-                    const endIndex = match ? startIndex + prefix.length + match.index : lineText.length;
-                    
-                    if (cursor.ch >= startIndex && cursor.ch <= endIndex) {
-                        const rawData = lineText.substring(startIndex + prefix.length, endIndex).trim();
-                        new KetcherModal(this, rawData, "smiles", (newData, isFile, newFormat) => {
-                            if (isFile) {
-                                editor.replaceRange(`!${newData}`, {line: cursor.line, ch: startIndex}, {line: cursor.line, ch: endIndex});
-                                return;
-                            }
-                            if (newFormat === "ket") {
-                                new Notice("Inline reactions not supported. Replaced with codeblock.");
-                                editor.replaceRange(`\n\`\`\`ket\n${newData}\n\`\`\`\n`, {line: cursor.line, ch: startIndex}, {line: cursor.line, ch: endIndex});
-                                return;
-                            }
-                            editor.replaceRange(newData, {line: cursor.line, ch: startIndex + prefix.length}, {line: cursor.line, ch: endIndex});
-                        }).open();
-                        return;
-                    }
-                }
-                new Notice("Place your cursor inside an inline $smiles= string first!");
-            }
-        });
-
         this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
+            const container = document.createElement("div");
+            el.appendChild(container);
+
             const elnRenderer = new SharedElnRenderer(this); 
-            const wrapper = await elnRenderer.renderElnBlock(source, el, ctx);
+            await elnRenderer.renderElnBlock(source, container, ctx);
             
             // @ts-ignore
             const Smi = SmiDrawer;
             const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
         
-            wrapper.querySelectorAll('.eln-structure').forEach((node: HTMLElement) => {
+            container.querySelectorAll('.eln-structure').forEach((node: HTMLElement) => {
                 const smiles = node.getAttribute('data-smiles');
                 const cssSize = node.classList.contains('scheme-size') ? 110 : 90;
                 
@@ -389,13 +517,16 @@ export default class ChemEditPlugin extends Plugin {
                     });
                 }
                 
+                node.addEventListener("contextmenu", (e) => {
+                    if (smiles) this.showChemicalContextMenu(e, smiles);
+                });
+
                 node.addEventListener('dblclick', (e) => {
                     e.stopPropagation();
                     const type = node.getAttribute('data-type');
                     const index = parseInt(node.getAttribute('data-index') || '0', 10);
-                    
                     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                    const info = ctx.getSectionInfo(el);
+                    const info = ctx.getSectionInfo(el.parentElement || el);
                     
                     new KetcherModal(this, smiles || "", "smiles", (newData, isFile, newFormat) => {
                         if (newFormat === "ket") { new Notice("ELN tables only support SMILES. Arrow discarded."); return; }
@@ -413,11 +544,15 @@ export default class ChemEditPlugin extends Plugin {
                     }).open();
                 });
             });
-            el.appendChild(wrapper);
         });
 
         this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => {
-            const galleryRenderer = new SharedGalleryRenderer(this);
+            const galleryRenderer = new ElnGalleryRenderer(this);
+            await galleryRenderer.renderChemGallery(source, el, ctx);
+        });
+
+        this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => {
+            const galleryRenderer = new ElnGalleryRenderer(this); 
             await galleryRenderer.renderGalleryBlock(source, el, ctx);
         });
 
@@ -540,7 +675,6 @@ export default class ChemEditPlugin extends Plugin {
             });
         };
 
-        // Guarantee that ALL supported formats register as code blocks
         const builtInCodeblocks = ["mol", "cdxml", "ket", "sdf", "rxn", "inchi", "smarts", "fasta", "sequence", "idt", "helm", "biln"];
         const allCodeblocks = [...new Set([...builtInCodeblocks, ...this.getSupportedExts()])];
 
@@ -552,89 +686,122 @@ export default class ChemEditPlugin extends Plugin {
 
         this.registerMarkdownCodeBlockProcessor("smiles", (source, el, ctx) => {
             const cleanSmiles = source.trim();
-            const wrapper = document.createElement("div");
-            wrapper.style.cursor = "pointer";
-            wrapper.title = "Double-click to edit structure";
-            wrapper.style.display = "inline-block";
-            el.appendChild(wrapper);
+            const lines = cleanSmiles.split(/[\r\n]+/).map(l => l.trim()).filter(l => l.length > 0);
 
-            const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
-            
-            const cssW = this.settings.width;
-            const cssH = this.settings.height;
-            const drawerOptions = { width: cssW * 2, height: cssH * 2 };
+            if (lines.length > 1) {
+                const grid = el.createDiv();
+                grid.style.display = "grid";
+                grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(140px, 1fr))`;
+                grid.style.gap = "10px";
+                grid.style.margin = "10px 0";
 
-            requestAnimationFrame(() => {
-                try {
-                    // @ts-ignore
-                    const Smi: any = SmiDrawer; 
-
-                    if (cleanSmiles.includes('>')) {
-                        const rxnContainer = document.createElement("span");
-                        rxnContainer.style.display = "inline-flex";
-                        rxnContainer.style.alignItems = "center";
-                        wrapper.appendChild(rxnContainer);
-                        
-                        Smi.parseReaction(cleanSmiles, (tree: any) => {
-                            if (this.settings.useSvgSmiles) {
-                                const rxnDrawer = new Smi.ReactionDrawer({width: cssW, height: cssH}, {width: cssW, height: cssH});
-                                rxnDrawer.draw(tree, rxnContainer, theme);
-                            } else {
-                                const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
-                                rxnDrawer.draw(tree, rxnContainer, theme);
-                                const canvases = rxnContainer.querySelectorAll('canvas');
-                                canvases.forEach(c => {
-                                    c.style.width = `${c.width / 2}px`;
-                                    c.style.height = `${c.height / 2}px`;
-                                });
-                            }
-                        }, (err: any) => wrapper.innerHTML = `<span class="color-red">Reaction Error: ${err}</span>`);
-                    } else {
-                        if (this.settings.useSvgSmiles) {
-                            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-                            svg.style.width = `${cssW}px`;
-                            svg.style.height = `${cssH}px`;
-                            wrapper.appendChild(svg);
-                            Smi.parse(cleanSmiles, (tree: any) => {
-                                const drawer = new Smi.SvgDrawer({width: cssW, height: cssH});
-                                drawer.draw(tree, svg, theme);
-                            }, (err: any) => wrapper.innerHTML = `<span class="color-red">Molecule Error: ${err}</span>`);
-                        } else {
-                            const canvas = document.createElement("canvas");
-                            canvas.style.width = `${cssW}px`;
-                            canvas.style.height = `${cssH}px`;
-                            wrapper.appendChild(canvas);
-                            Smi.parse(cleanSmiles, (tree: any) => {
-                                const drawer = new Smi.Drawer(drawerOptions);
-                                drawer.draw(tree, canvas, theme);
-                            }, (err: any) => wrapper.innerHTML = `<span class="color-red">Molecule Error: ${err}</span>`);
-                        }
-                    }
-                } catch (err: any) {
-                    wrapper.innerHTML = `<span class="color-red">Drawer Error: ${err.message}</span>`;
+                for (const line of lines) {
+                    const cell = grid.createDiv();
+                    this.renderSmilesBlock(line, cell, ctx, true, 140, 140);
                 }
-            });
+            } else {
+                this.renderSmilesBlock(cleanSmiles, el, ctx, false, this.settings.width, this.settings.height);
+            }
+        });
+    }
 
-            wrapper.addEventListener("dblclick", () => {
-                const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (!view) return;
-                const info = ctx.getSectionInfo(el);
-                new KetcherModal(this, cleanSmiles, "smiles", (newData, isFile, newFormat) => {
-                    const editor = view.editor;
-                    if (info) {
-                        if (isFile) {
-                            editor.replaceRange(`!${newData}\n`, 
-                                { line: info.lineStart, ch: 0 }, 
-                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+    renderSmilesBlock(smiles: string, el: HTMLElement, ctx: any, isGridItem: boolean, w: number, h: number) {
+        const wrapper = document.createElement("div");
+        wrapper.style.cursor = "pointer";
+        wrapper.title = "Double-click to edit structure"; 
+        wrapper.style.display = isGridItem ? "flex" : "inline-block";
+        wrapper.style.alignItems = "center"; 
+        wrapper.style.justifyContent = "center";
+        
+        if (isGridItem) {
+            wrapper.style.padding = "10px";
+            wrapper.style.backgroundColor = "var(--background-primary)";
+            wrapper.style.border = "1px solid var(--background-modifier-border)";
+            wrapper.style.borderRadius = "8px";
+        }
+        el.appendChild(wrapper);
+
+        const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
+        const drawerOptions = { width: w * 2, height: h * 2 };
+
+        requestAnimationFrame(() => {
+            try {
+                // @ts-ignore
+                const Smi: any = SmiDrawer; 
+                if (smiles.includes('>')) {
+                    const rxnContainer = document.createElement("span");
+                    rxnContainer.style.display = "inline-flex";
+                    rxnContainer.style.alignItems = "center";
+                    wrapper.appendChild(rxnContainer);
+                    
+                    Smi.parseReaction(smiles, (tree: any) => {
+                        if (this.settings.useSvgSmiles) {
+                            const rxnDrawer = new Smi.ReactionDrawer({width: w, height: h}, {width: w, height: h});
+                            rxnDrawer.draw(tree, rxnContainer, theme);
                         } else {
-                            const finalFormat = newFormat || "smiles";
-                            editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
-                                { line: info.lineStart, ch: 0 }, 
-                                { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                            const rxnDrawer = new Smi.ReactionDrawer(drawerOptions, drawerOptions);
+                            rxnDrawer.draw(tree, rxnContainer, theme);
+                            const canvases = rxnContainer.querySelectorAll('canvas');
+                            canvases.forEach(c => {
+                                c.style.width = `${c.width / 2}px`;
+                                c.style.height = `${c.height / 2}px`;
+                            });
                         }
+                    }, (err: any) => wrapper.innerHTML = `<span class="color-red">Reaction Error: ${err}</span>`);
+                } else {
+                    if (this.settings.useSvgSmiles) {
+                        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                        svg.style.width = `${w}px`;
+                        svg.style.height = `${h}px`;
+                        wrapper.appendChild(svg);
+                        Smi.parse(smiles, (tree: any) => {
+                            const drawer = new Smi.SvgDrawer({width: w, height: h});
+                            drawer.draw(tree, svg, theme);
+                        });
+                    } else {
+                        const canvas = document.createElement("canvas");
+                        canvas.style.width = `${w}px`;
+                        canvas.style.height = `${h}px`;
+                        wrapper.appendChild(canvas);
+                        Smi.parse(smiles, (tree: any) => {
+                            const drawer = new Smi.Drawer(drawerOptions);
+                            drawer.draw(tree, canvas, theme);
+                        });
                     }
-                }).open();
-            });
+                }
+            } catch (err: any) {
+                wrapper.innerHTML = `<span class="color-red">Drawer Error: ${err.message}</span>`;
+            }
+        });
+
+        // --- ATTACH CONTEXT MENU ---
+        wrapper.addEventListener("contextmenu", (e) => {
+            this.showChemicalContextMenu(e, smiles);
+        });
+
+        wrapper.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            if (isGridItem) { new Notice("Cannot inline-edit grids yet. Edit code block manually."); return; }
+            
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!view) return;
+            const info = ctx.getSectionInfo(el.parentElement || el);
+            
+            new KetcherModal(this, smiles, "smiles", (newData, isFile, newFormat) => {
+                const editor = view.editor;
+                if (info) {
+                    if (isFile) {
+                        editor.replaceRange(`!${newData}\n`, 
+                            { line: info.lineStart, ch: 0 }, 
+                            { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                    } else {
+                        const finalFormat = newFormat || "smiles";
+                        editor.replaceRange(`\`\`\`${finalFormat}\n${newData}\n\`\`\``, 
+                            { line: info.lineStart, ch: 0 }, 
+                            { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length });
+                    }
+                }
+            }).open();
         });
     }
 
@@ -907,58 +1074,6 @@ export default class ChemEditPlugin extends Plugin {
             }
         }).open();
     }
-	
-    openKetcherModal(initialData: string, format: string, onSave: (data: string) => void) {
-        new KetcherModal(this, initialData, format, (newData, isFile, newFormat) => {
-            onSave(newData);
-        }).open();
-    }
-    
-	openKetcherForFile(file: TFile, data: string, format: string, previewWrapper: HTMLElement) {
-        let openData = data;
-        let openFormat = format;
-        if (format === 'svg') {
-            const ex = extractDataFromSvg(data);
-            if (ex) { openData = ex.data; openFormat = ex.format; }
-            else { new Notice("Not a Ketcher SVG"); return; }
-        }
-
-        new KetcherModal(this, openData, openFormat, async (newData, isFile, newFormat) => {
-            await this.app.vault.modify(file, newData);
-            new Notice(`Saved ${file.name}`);
-            
-            previewWrapper.innerHTML = `<span class="color-text-muted" style="font-size:12px;">⏳</span>`;
-            
-            if (format === 'svg') {
-                previewWrapper.innerHTML = '';
-                const svgContainer = document.createElement("div");
-                svgContainer.innerHTML = newData;
-                const svgNode = svgContainer.querySelector('svg');
-                if (svgNode) { svgNode.style.width = '100%'; svgNode.style.height = '100%'; }
-                previewWrapper.appendChild(svgContainer);
-            } else {
-                const originalW = this.settings.width; const originalH = this.settings.height;
-                this.settings.width = 120; this.settings.height = 100;
-                
-                const updatedPreview = await this.renderMoleculeToPreview(newData, newFormat || format, false);
-                
-                this.settings.width = originalW; this.settings.height = originalH;
-                
-                if (updatedPreview) {
-                    previewWrapper.empty();
-                    updatedPreview.style.maxWidth = '100%'; updatedPreview.style.maxHeight = '100%';
-                    previewWrapper.appendChild(updatedPreview);
-                }
-            }
-        }).open();
-    }
-
-    insertSmilesAtCursor(editor: Editor, data: string, format: string) {
-        const cursor = editor.getCursor();
-        const textToInsert = `\`\`\`${format}\n${data}\n\`\`\`\n`;
-        editor.replaceRange(textToInsert, cursor);
-        editor.setCursor({ line: cursor.line + 3, ch: 0 });
-    }
 
     async injectNativeEmbed(embed: HTMLElement, src: string, sourcePath: string) {
         const file = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
@@ -1217,14 +1332,14 @@ export default class ChemEditPlugin extends Plugin {
         });
     }
 	
-	async renderMoleculeToPreview(data: string, format: string, isInline: boolean = false): Promise<HTMLElement | null> {
+	async renderMoleculeToPreview(data: string, format: string, isInline: boolean = false, overrideW?: number, overrideH?: number): Promise<HTMLElement | null> {
         if (!data) return null;
         
         const normalizedFormat = format ? format.toLowerCase() : 'smiles';
         const cleanData = normalizedFormat === 'smiles' || normalizedFormat === 'eln' ? data.trim() : data; 
 
-        const w = isInline ? this.settings.inlineWidth : this.settings.width;
-        const h = isInline ? this.settings.inlineHeight : this.settings.height;
+        const w = overrideW ? overrideW : (isInline ? this.settings.inlineWidth : this.settings.width);
+        const h = overrideH ? overrideH : (isInline ? this.settings.inlineHeight : this.settings.height);
         const theme = document.body.hasClass("theme-dark") ? this.settings.darkTheme : this.settings.lightTheme;
         
         const drawerOptions = { width: w * 2, height: h * 2 };
@@ -1278,7 +1393,7 @@ export default class ChemEditPlugin extends Plugin {
                 }
             } else if (['mol', 'cdxml', 'sdf', 'rxn', 'rdf', 'cml', 'ket', 'inchi', 'smarts', 'fasta', 'sequence', 'idt', 'helm', 'biln'].includes(normalizedFormat)) {
                 return new Promise((resolve) => {
-                    this.headlessQueue.push({ data: cleanData, isInline, resolve });
+                    this.headlessQueue.push({ data: cleanData, isInline, resolve, w, h });
                     this.processHeadlessQueue();
                 });
             }
@@ -1354,8 +1469,8 @@ export default class ChemEditPlugin extends Plugin {
                 svgEl.style.width = '100%';
                 svgEl.style.height = '100%';
                 
-                const w = task.isInline ? this.settings.inlineWidth : this.settings.width;
-                const h = task.isInline ? this.settings.inlineHeight : this.settings.height;
+                const w = task.w ? task.w : (task.isInline ? this.settings.inlineWidth : this.settings.width);
+                const h = task.h ? task.h : (task.isInline ? this.settings.inlineHeight : this.settings.height);
 
                 const container = document.createElement('div');
                 container.className = 'chemedit-svg-preview';
@@ -1658,7 +1773,7 @@ class KetcherModal extends Modal {
                 this.reactRoot.unmount();
                 this.reactRoot = null;
             } else {
-                ReactDOM.unmountComponentAtNode(container);
+                ReactDOMunmountComponentAtNode(container);
             }
         }
         this.contentEl.empty();
@@ -1756,7 +1871,19 @@ class ChemEditSettingTab extends PluginSettingTab {
         const statusEl = containerEl.createEl('div', { cls: 'setting-item-description' });
         statusEl.innerHTML = `<span style="color:var(--text-success); font-size:1.2em">✅ <b>Bundled Ketcher Active</b></span><br>Ketcher is running directly inside Obsidian. Completely offline and fast!`;
 
-        containerEl.createEl('h3', { text: 'Fume Hood Utilities' });
+        containerEl.createEl('h3', { text: '📚 Compound Library' });
+        new Setting(containerEl)
+            .setName('Compound Library File Path')
+            .setDesc('Optional: Point to a .md file (e.g. Meta/Compounds.md) that contains markdown tables or lists of your common chemicals. Used for auto-filling the ELN and the Library command.')
+            .addText(text => text
+                .setPlaceholder('Meta/Compounds.md')
+                .setValue(this.plugin.settings.libraryFilePath)
+                .onChange(async (v) => {
+                    this.plugin.settings.libraryFilePath = v;
+                    await this.plugin.saveSettings();
+                }));
+
+        containerEl.createEl('h3', { text: '🔬 Fume Hood & ELN Utilities' });
 
         new Setting(containerEl)
             .setName('Show Media Ribbon Icons')
@@ -1815,8 +1942,23 @@ class ChemEditSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.elnSections)
                 .onChange(async (v) => { this.plugin.settings.elnSections = v; await this.plugin.saveSettings(); }));
 
+        containerEl.createEl('h3', { text: '🖱️ Context Menu (Right-Click)' });
+        containerEl.createEl('div', { cls: 'setting-item-description', text: 'Customize the links in the right-click menu for SMILES blocks. Use {{smiles}} to inject the structure.' }).style.marginBottom = "10px";
+        
+        new Setting(containerEl).setName('Custom Link 1 Name').addText(text => text.setValue(this.plugin.settings.contextUrl1Name).onChange(async (v) => { this.plugin.settings.contextUrl1Name = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Custom Link 1 URL').addText(text => text.setValue(this.plugin.settings.contextUrl1).onChange(async (v) => { this.plugin.settings.contextUrl1 = v; await this.plugin.saveSettings(); }));
+        
+        new Setting(containerEl).setName('Custom Link 2 Name').addText(text => text.setValue(this.plugin.settings.contextUrl2Name).onChange(async (v) => { this.plugin.settings.contextUrl2Name = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Custom Link 2 URL').addText(text => text.setValue(this.plugin.settings.contextUrl2).onChange(async (v) => { this.plugin.settings.contextUrl2 = v; await this.plugin.saveSettings(); }));
 
-        containerEl.createEl('h3', { text: 'Smart Paste Behavior' });
+        new Setting(containerEl).setName('Custom Link 3 Name').addText(text => text.setValue(this.plugin.settings.contextUrl3Name).onChange(async (v) => { this.plugin.settings.contextUrl3Name = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Custom Link 3 URL').addText(text => text.setValue(this.plugin.settings.contextUrl3).onChange(async (v) => { this.plugin.settings.contextUrl3 = v; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl).setName('Custom Link 4 Name').addText(text => text.setValue(this.plugin.settings.contextUrl4Name).onChange(async (v) => { this.plugin.settings.contextUrl4Name = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Custom Link 4 URL').addText(text => text.setValue(this.plugin.settings.contextUrl4).onChange(async (v) => { this.plugin.settings.contextUrl4 = v; await this.plugin.saveSettings(); }));
+
+
+        containerEl.createEl('h3', { text: '📋 Smart Paste & Embeds' });
 
         new Setting(containerEl)
             .setName('Auto-format pasted SMILES')
@@ -1838,9 +1980,6 @@ class ChemEditSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 				
-        containerEl.createEl('br');
-        containerEl.createEl('h3', { text: 'Block Embeds' });
-        
         new Setting(containerEl)
             .setName('Supported File Extensions')
             .setDesc('Comma-separated list of extensions that should render chemical views automatically via ![[file.ext]] embeds.')
@@ -1861,6 +2000,8 @@ class ChemEditSettingTab extends PluginSettingTab {
                     this.plugin.settings.useAcsSettings = value;
                     await this.plugin.saveSettings();
                 }));
+
+        containerEl.createEl('h3', { text: '📝 Inline Structures' });
 
         new Setting(containerEl)
             .setName('Image Width')
@@ -1883,8 +2024,6 @@ class ChemEditSettingTab extends PluginSettingTab {
                     this.plugin.settings.useSvgSmiles = value;
                     await this.plugin.saveSettings();
                 }));
-
-        containerEl.createEl('h3', { text: 'Inline Embeds (Tables & Sentences)' });
 
         new Setting(containerEl)
             .setName('Inline Image Width')
@@ -1910,7 +2049,7 @@ class ChemEditSettingTab extends PluginSettingTab {
             .addText(text => text.setValue(this.plugin.settings.inlineMolPrefix)
                 .onChange(async (v) => { this.plugin.settings.inlineMolPrefix = v; await this.plugin.saveSettings(); }));
 
-        containerEl.createEl('h3', { text: 'Theming' });
+        containerEl.createEl('h3', { text: '🎨 Theming' });
 
         const themeOptions = {
             'light': 'Light', 'dark': 'Dark', 'oldschool': 'Oldschool (B&W)',
