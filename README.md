@@ -16,8 +16,15 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 <img width="800" height="900" alt="ELNquckdemo-ezgif com-optimize" src="https://github.com/user-attachments/assets/5a4a6d77-9652-4501-8ce9-5ff0cb226953" />
 
 
+### 🚀 What's New in ChemEdit 1.3.3
 
-### 🚀 What's New in ChemEdit
+* **Compound Library** — Search, insert, and save compounds from built-in or custom Markdown libraries.
+* **Chemistry Context Menu** — Right-click structures to copy SMILES/MOL, retrieve chemical properties, and open PubChem, ChemSpider, MolPort, or NMRium.
+<img width="608" height="358" alt="image" src="https://github.com/user-attachments/assets/1ffca57a-5e24-41dd-94f9-472665688e91" />
+
+
+1.3.2
+
 - **Interactive ELN Editor:** Added a floating action bar to ELN blocks. You can now visually edit Reactants, Products, Equivalents, and Procedures via a clean UI without touching Markdown YAML!
 - **🧪 Auto-Name Structures:** Added a smart "Auto-Name" button inside the ELN editor that automatically fetches IUPAC/Common names for your drawn structures via PubChem/CACTUS.
 - **📸 Fume Hood Utilities (Media Ribbon):** Take Lab Photos or upload TLC plates directly into your notes. 
