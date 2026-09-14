@@ -1,6 +1,81 @@
 // SharedEln.ts
 import { App, Modal, Notice, requestUrl, MarkdownView, TFile, Menu, FuzzySuggestModal } from 'obsidian';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
+import SmiDrawer from 'smiles-drawer';
+
+// ------------------------------------------------------------------
+// OFFLINE MOLECULAR WEIGHT CALCULATOR
+// ------------------------------------------------------------------
+export async function calculateMwOffline(smiles: string): Promise<{ mw: number, formula: string }> {
+    return new Promise((resolve) => {
+        try {
+            // @ts-ignore
+            const Smi: any = SmiDrawer;
+            let mw = 0;
+            
+            const masses: Record<string, number> = {
+                'C':12.011, 'N':14.007, 'O':15.999, 'S':32.065, 'P':30.974,
+                'F':18.998, 'CL':35.45, 'BR':79.904, 'I':126.90, 'B':10.81, 'H':1.008,
+                'SI':28.085, 'NA':22.99, 'K':39.098, 'MG':24.305, 'CA':40.078
+            };
+
+            const canvas = document.createElement("canvas");
+            const drawer = new Smi.Drawer({ width: 100, height: 100 });
+            
+            Smi.parse(smiles, (tree: any) => {
+                try {
+                    // Force a hidden draw to build the internal molecular graph
+                    drawer.draw(tree, canvas, 'light', false);
+                    
+                    if (drawer.graph && drawer.graph.vertices) {
+                        let hCount = 0;
+                        const vertices = Array.isArray(drawer.graph.vertices) ? drawer.graph.vertices : Object.values(drawer.graph.vertices);
+                        
+                        for (const v of vertices as any[]) {
+                            const atom = v.value || v;
+                            const el = (atom.element || '').toUpperCase();
+                            if (el && masses[el]) {
+                                mw += (atom.isotope && atom.isotope > 0) ? atom.isotope : masses[el];
+                            }
+                            // smiles-drawer calculates exact implicit hydrogens here!
+                            if (atom.hydrogens !== undefined) {
+                                hCount += atom.hydrogens;
+                            }
+                        }
+                        mw += hCount * masses['H'];
+                        resolve({ mw, formula: "Offline" });
+                        return;
+                    }
+                } catch(err) {
+                    // Fallback to basic string parsing if graph building fails
+                }
+                resolve(fallbackMW(smiles));
+            }, (err: any) => {
+                resolve(fallbackMW(smiles));
+            });
+        } catch (e) {
+            resolve(fallbackMW(smiles));
+        }
+    });
+}
+
+function fallbackMW(smiles: string) {
+    let mw = 0;
+    const els = smiles.match(/Br|Cl|[A-Z][a-z]?|[a-z]/g);
+    if (els) {
+         const masses: Record<string, number> = {
+            'C':12.011, 'N':14.007, 'O':15.999, 'S':32.065, 'P':30.974,
+            'F':18.998, 'CL':35.45, 'BR':79.904, 'I':126.90, 'B':10.81
+         };
+         els.forEach(e => {
+             const up = e.toUpperCase();
+             if (masses[up]) mw += masses[up];
+         });
+         mw += els.length * 1.008; // Rough fallback estimate of 1H per heavy atom
+         return { mw, formula: "Est." };
+    }
+    return { mw: 0, formula: "Unknown" };
+}
 
 // ------------------------------------------------------------------
 // COMPOUND LIBRARY SYSTEM
@@ -167,7 +242,28 @@ export class SharedElnRenderer {
         wrapper.innerHTML = `<h3 class="color-text-muted" style="text-align:center;">⏳ Calculating...</h3>`;
 
         try {
-            const safeSource = source.replace(/smiles:\s*(\[.*)$/gm, 'smiles: "$1"');
+            // FIX: Smartly quote SMILES, handling '#' as triple bonds vs comments properly
+            const safeSource = source.replace(/smiles:\s*(.*)$/gm, (match, p1) => {
+                let s = p1.trim();
+                if (!s) return match;
+                
+                let comment = "";
+                // Only treat '#' as a comment if preceded by whitespace (YAML spec)
+                const commentMatch = s.match(/(\s+#.*)$/);
+                if (commentMatch) {
+                    comment = commentMatch[1];
+                    s = s.substring(0, s.length - comment.length).trim();
+                }
+                
+                // Remove existing surrounding quotes to re-apply them correctly
+                if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+                    s = s.substring(1, s.length - 1);
+                }
+                
+                s = s.replace(/\\"/g, '"');
+                s = s.replace(/'/g, "''"); // escape single quotes for YAML
+                return `smiles: '${s}'${comment}`;
+            });
             
             const data = parseYaml(safeSource);
             if (!data) throw new Error("Empty YAML Data.");
@@ -254,7 +350,7 @@ export class SharedElnRenderer {
                     let md = `![[${link}]]\n\n| Spot | $R_f$ |\n|---|---|\n`;
                     rfData.forEach((s, i) => md += `| ${i+1} | **${s.rf.toFixed(2)}** |\n`);
                     appendSmart(md, "Analytical Data"); new Notice(`Added ${filename}`);
-                }).open();
+                });
             });
 
             createBtn("📋 Copy", "Copy Stoichiometry Table to Clipboard", () => {
@@ -266,6 +362,33 @@ export class SharedElnRenderer {
 
             createBtn("🗐 Clone", "Duplicate this experiment into a new file", () => {
                 new CloneExperimentModal(this.plugin.app, expCode, currentFile, data).open();
+            });
+            
+            // Re-calculate all Offline weights instantly when manually clicked!
+            createBtn("🧮 Recalc MW", "Recalculate Molecular Weights Offline", async () => {
+                let updated = false;
+                for (const r of data.reactants) { 
+                    if (r.smiles) { 
+                        const p = await calculateMwOffline(r.smiles); 
+                        if (p.mw) { r.mw = p.mw; r.formula = p.formula; updated = true; } 
+                    } 
+                }
+                for (const p of data.products) { 
+                    if (p.smiles) { 
+                        const p2 = await calculateMwOffline(p.smiles); 
+                        if (p2.mw) { p.mw = p2.mw; p.formula = p2.formula; updated = true; } 
+                    } 
+                }
+                if (updated && view) {
+                    const info = ctx.getSectionInfo(el.parentElement || el);
+                    if (info) {
+                        const newYaml = stringifyYaml(data);
+                        view.editor.replaceRange(`\`\`\`eln\n${newYaml}\`\`\``, {line: info.lineStart, ch: 0}, {line: info.lineEnd, ch: view.editor.getLine(info.lineEnd).length});
+                        new Notice("Molecular weights recalculated!");
+                    }
+                } else {
+                    new Notice("No structures could be recalculated.");
+                }
             });
 
             createBtn("📝 Edit", "Edit Metadata & Conditions", () => {
@@ -291,21 +414,11 @@ export class SharedElnRenderer {
 
             // --- CALCULATIONS ---
             const fetchChemProps = async (smiles: string) => {
-                try {
-                    const controller = new AbortController();
-                    const id = setTimeout(() => controller.abort(), 2000); 
-                    const res = await requestUrl({ url: `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`, method: "GET" });
-                    clearTimeout(id);
-                    if(res.status === 200) {
-                        const props = res.json.PropertyTable.Properties[0];
-                        return { mw: parseFloat(props.MolecularWeight), formula: props.MolecularFormula };
-                    }
-                } catch (e) { }
-                return { mw: 0, formula: "Unknown" };
+                return await calculateMwOffline(smiles);
             };
 
-            for (const r of data.reactants) { if (r.smiles && (!r.mw || !r.formula)) { const p = await fetchChemProps(r.smiles); r.mw = r.mw || p.mw; r.formula = r.formula || p.formula; } }
-            for (const p of data.products) { if (p.smiles && (!p.mw || !p.formula)) { const p2 = await fetchChemProps(p.smiles); p.mw = p.mw || p2.mw; p.formula = p.formula || p2.formula; } }
+            for (const r of data.reactants) { if (r.smiles && (!r.mw || !r.formula || r.formula === 'Unknown')) { const p = await fetchChemProps(r.smiles); r.mw = r.mw || p.mw; r.formula = r.formula || p.formula; } }
+            for (const p of data.products) { if (p.smiles && (!p.mw || !p.formula || p.formula === 'Unknown')) { const p2 = await fetchChemProps(p.smiles); p.mw = p.mw || p2.mw; p.formula = p.formula || p2.formula; } }
 
             let limitingR = data.reactants.find((r: any) => r.is_limiting);
             if (!limitingR && data.reactants.length > 0) {
@@ -517,7 +630,24 @@ export class ElnGalleryRenderer {
             if (!blockMatch) continue;
             
             try {
-                const safeSource = blockMatch[1].replace(/smiles:\s*(\[.*)$/gm, 'smiles: "$1"');
+                // Apply strict YAML quoting fix to gallery previews as well!
+                const safeSource = blockMatch[1].replace(/smiles:\s*(.*)$/gm, (match, p1) => {
+                    let s = p1.trim();
+                    if (!s) return match;
+                    let comment = "";
+                    const commentMatch = s.match(/(\s+#.*)$/);
+                    if (commentMatch) {
+                        comment = commentMatch[1];
+                        s = s.substring(0, s.length - comment.length).trim();
+                    }
+                    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+                        s = s.substring(1, s.length - 1);
+                    }
+                    s = s.replace(/\\"/g, '"');
+                    s = s.replace(/'/g, "''");
+                    return `smiles: '${s}'${comment}`;
+                });
+                
                 const yamlObj = parseYaml(safeSource);
                 let dataToRender = "";
                 
@@ -811,40 +941,6 @@ export class ElnMetaEditorModal extends Modal {
         } catch (e) {}
         return "";
     }
-
-    async fetchChemDataFromSmiles(smiles: string): Promise<any> {
-        let resObj = { name: "", mw: 0, formula: "", ghs: [] as string[] };
-        
-        try {
-            const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/Title,MolecularWeight,MolecularFormula/JSON`);
-            if (res.status === 200) {
-                const props = res.json.PropertyTable.Properties[0];
-                if (!resObj.name) resObj.name = props.Title; 
-                resObj.mw = parseFloat(props.MolecularWeight); 
-                resObj.formula = props.MolecularFormula;
-            }
-        } catch(e) {}
-        
-        try {
-            const cidRes = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/cids/JSON`);
-            if (cidRes.status === 200) {
-                const cid = cidRes.json.IdentifierList.CID[0];
-                const ghsRes = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${cid}/JSON?heading=GHS+Classification`);
-                const str = JSON.stringify(ghsRes.json);
-                const emojis = [];
-                if (str.includes("GHS01")) emojis.push("💣");
-                if (str.includes("GHS02")) emojis.push("🔥");
-                if (str.includes("GHS03") || str.includes("GHS04") || str.includes("GHS05")) emojis.push("🧪");
-                if (str.includes("GHS06")) emojis.push("☠️");
-                if (str.includes("GHS07")) emojis.push("⚠️");
-                if (str.includes("GHS08")) emojis.push("⚕️");
-                if (str.includes("GHS09")) emojis.push("🌳");
-                resObj.ghs = [...new Set(emojis)];
-            }
-        } catch(e) {}
-        
-        return resObj;
-    }
     
     onOpen() { this.render(); }
     
@@ -934,15 +1030,41 @@ export class ElnMetaEditorModal extends Modal {
                 else { new Notice("Structure not found."); fetchSmilesBtn.innerText = "🧪 N \u2192 S"; }
             };
 
-            const fetchDataBtn = actionRow.createEl("button", { text: "🔍 S \u2192 D", attr: {style: "font-size:11px; padding: 4px 8px;", title: "Structure to Data"} });
+            const fetchDataBtn = actionRow.createEl("button", { text: "🔍 S \u2192 D", attr: {style: "font-size:11px; padding: 4px 8px;", title: "Structure to Data (Offline + Name from Web)"} });
             fetchDataBtn.onclick = async () => {
                 if (!item.smiles) { new Notice("Draw a structure first."); return; }
                 fetchDataBtn.innerText = "⏳...";
                 try {
-                    const d = await this.fetchChemDataFromSmiles(item.smiles);
-                    if (d.name) item.name = d.name; if (d.mw) item.mw = d.mw; if (d.formula) item.formula = d.formula; if (d.ghs) item.ghs = d.ghs;
-                    nameInp.value = item.name || ""; new Notice(`Found data for ${item.name}`);
-                } catch(e) { new Notice("Could not fetch data."); }
+                    // Try true offline MW calc!
+                    const offlineProps = await calculateMwOffline(item.smiles);
+                    if (offlineProps.mw) item.mw = offlineProps.mw;
+                    if (offlineProps.formula) item.formula = offlineProps.formula;
+
+                    // Fetch standard name and extra GHS props safely from Web as bonus
+                    if (!item.name) {
+                        try {
+                            const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(item.smiles)}/property/Title/JSON`);
+                            if (res.status === 200) item.name = res.json.PropertyTable.Properties[0].Title;
+                        } catch(e) {}
+                    }
+                    try {
+                        const cidRes = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(item.smiles)}/cids/JSON`);
+                        if (cidRes.status === 200) {
+                            const cid = cidRes.json.IdentifierList.CID[0];
+                            const ghsRes = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${cid}/JSON?heading=GHS+Classification`);
+                            const str = JSON.stringify(ghsRes.json);
+                            const emojis = [];
+                            if (str.includes("GHS01")) emojis.push("💣"); if (str.includes("GHS02")) emojis.push("🔥");
+                            if (str.includes("GHS03") || str.includes("GHS04") || str.includes("GHS05")) emojis.push("🧪");
+                            if (str.includes("GHS06")) emojis.push("☠️"); if (str.includes("GHS07")) emojis.push("⚠️");
+                            if (str.includes("GHS08")) emojis.push("⚕️"); if (str.includes("GHS09")) emojis.push("🌳");
+                            item.ghs = [...new Set(emojis)];
+                        }
+                    } catch(e) {}
+
+                    nameInp.value = item.name || ""; 
+                    new Notice(`Calculated offline MW for ${item.name || 'Structure'}`);
+                } catch(e) { new Notice("Error. MW calculated offline via fallback."); }
                 fetchDataBtn.innerText = "🔍 S \u2192 D";
                 this.render();
             };
