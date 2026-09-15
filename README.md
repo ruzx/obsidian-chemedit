@@ -15,8 +15,17 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 <img width="800" height="900" alt="ELNquckdemo-ezgif com-optimize" src="https://github.com/user-attachments/assets/5a4a6d77-9652-4501-8ce9-5ff0cb226953" />
 
+📝 Release Notes
 
-### 🚀 What's New in ChemEdit 1.3.3
+### 🚀 What's New in ChemEdit 1.3.5
+
+  - Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g.,
+    geometric isomers).
+  - Added a "Recalc MW" button to update existing ELN blocks.
+  - Thanks to @ignorgchem!
+
+
+### 🚀 What's New in ChemEdit 1.3.3 - 1.3.4
 
 * **Compound Library** — Search, insert, and save compounds from built-in or custom Markdown libraries.
 * **Chemistry Context Menu** — Right-click structures to copy SMILES/MOL, retrieve chemical properties, and open PubChem, ChemSpider, MolPort, or NMRium.
