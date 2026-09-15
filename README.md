@@ -17,12 +17,49 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 📝 Release Notes
 
-### 🚀 What's New in ChemEdit 1.3.5
+### 🚀 What's New in ChemEdit 1.3.5-1.3.6
 
-  - Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g.,
-    geometric isomers).
-  - Added a "Recalc MW" button to update existing ELN blocks.
-  - Thanks to @ignorgchem!
+- Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g.,
+    geometric isomers). (thanks @ignorgchem!).
+- Fixed MW auto-calculation bugs for atoms like P and S (thanks @Snipinium!).
+- Added **inline editing** to ELN tables: double-click Eq, Mass, Temp, or Solvent to edit.
+- Added basic support for **drawing full reactions** in the ELN editor (it will try to parse reactants and products from the arrow).
+- Added `chem-db` code blocks for better tracking inventories and libraries.
+
+***
+
+### 📖 How to use ChemDB blocks
+Insert these anywhere to generate interactive databases:
+
+**Compound Library (Table):**
+<pre><code>```chem-db
+type: library
+folder: Library
+```</code></pre>
+
+**Compound Library (Grid):**
+<pre><code>```chem-db
+type: library
+path: Library
+layout: grid
+```</code></pre>
+
+**ELN Database:**
+<pre><code>```chem-db
+type: eln
+folder: _mobile_obsidian/ELN
+```</code></pre>
+
+**Chemical Inventory:**
+<pre><code>```chem-db
+type: inventory
+folder: _mobile_obsidian/Chemical_Inventory
+```</code></pre>
+
+<img width="230" alt="image" src="https://github.com/user-attachments/assets/ea5505a7-538a-440c-be8a-28dda7a1bfec" />
+<img width="230" alt="image" src="https://github.com/user-attachments/assets/a90ab543-0f1c-464e-abad-b7a7975df0c2" />
+
+
 
 
 ### 🚀 What's New in ChemEdit 1.3.3 - 1.3.4
