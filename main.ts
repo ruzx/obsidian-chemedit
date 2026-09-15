@@ -1,3 +1,4 @@
+// main.ts
 import { App, Modal, Plugin, MarkdownView, PluginSettingTab, Setting, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon, Menu } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
@@ -11,6 +12,8 @@ import { EditorView, ViewPlugin, ViewUpdate, WidgetType, Decoration, DecorationS
 import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer, getCompoundLibrary, CompoundSuggestModal, AddToLibraryModal, addCompoundToLibrary } from './SharedEln';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
 import { SharedGalleryRenderer } from './SharedGallery';
+import { ChemDatabaseRenderer, addCompoundToLibrary as addCompoundToDatabase } from './SharedBase';
+import { ChemDataEngine } from './ChemDataEngine';
 
 // Safely handle React 18 root rendering
 let createRoot: any = null;
@@ -109,15 +112,19 @@ export default class ChemEditPlugin extends Plugin {
     elnRibbonEl: HTMLElement | null = null;
 
     // --- CONTEXT MENU HELPER ---
-    showChemicalContextMenu(e: MouseEvent, smiles: string) {
-        e.preventDefault();
-        const menu = new Menu();
-        
+    populateChemicalMenu(menu: Menu, smiles: string) {
         menu.addItem((item) => {
-            item.setTitle("Add to Compound Library").setIcon("bookmark").onClick(() => {
+            item.setTitle("Add to Inline Library (Table)").setIcon("bookmark").onClick(() => {
                 new AddToLibraryModal(this.app, smiles, (name: string, sm: string) => { 
                     addCompoundToLibrary(this, name, sm); 
                 }).open();
+            });
+        });
+
+        menu.addItem((item) => {
+            item.setTitle("Add to Compound Database (Card)").setIcon("flask-round").onClick(() => {
+                // Now perfectly isolated to the 'Library' folder!
+                addCompoundToDatabase(this.app, this, "Library", () => {}, smiles);
             });
         });
 
@@ -158,13 +165,19 @@ export default class ChemEditPlugin extends Plugin {
         });
 
         menu.addItem((item) => {
-            item.setTitle("Copy MW & Formula (Web)").setIcon("info").onClick(async () => {
+            item.setTitle("Copy MW & Formula (Web/Offline)").setIcon("info").onClick(async () => {
                 try {
-                    const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`);
-                    if (res.status === 200) { 
-                        const p = res.json.PropertyTable.Properties[0];
-                        navigator.clipboard.writeText(`Formula: ${p.MolecularFormula}, MW: ${p.MolecularWeight}`); 
-                        new Notice("Properties copied!"); 
+                    const offlineProps = ChemDataEngine.getPropertiesFromSmiles(smiles);
+                    if (offlineProps) {
+                        navigator.clipboard.writeText(`Formula: ${offlineProps.formula}, MW: ${offlineProps.mw.toFixed(2)}`); 
+                        new Notice("Properties copied (Offline)!"); 
+                    } else {
+                        const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`);
+                        if (res.status === 200) { 
+                            const p = res.json.PropertyTable.Properties[0];
+                            navigator.clipboard.writeText(`Formula: ${p.MolecularFormula}, MW: ${p.MolecularWeight}`); 
+                            new Notice("Properties copied (Web)!"); 
+                        }
                     }
                 } catch(err) { new Notice("Error fetching properties."); }
             });
@@ -187,7 +200,12 @@ export default class ChemEditPlugin extends Plugin {
         addCustomLink(this.settings.contextUrl2Name, this.settings.contextUrl2, "shopping-cart");
         addCustomLink(this.settings.contextUrl3Name, this.settings.contextUrl3, "activity");
         addCustomLink(this.settings.contextUrl4Name, this.settings.contextUrl4, "link");
+    }
 
+    showChemicalContextMenu(e: MouseEvent, smiles: string) {
+        e.preventDefault();
+        const menu = new Menu();
+        this.populateChemicalMenu(menu, smiles);
         menu.showAtMouseEvent(e);
     }
 
@@ -247,14 +265,8 @@ export default class ChemEditPlugin extends Plugin {
                 this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
                     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
                     const currentFolder = this.settings.elnDirectory ? this.settings.elnDirectory : (view?.file?.parent?.path || "");
-                    let i = 1; let suggestedCode = this.settings.elnPrefix + "-001";
-                    while (true) {
-                        suggestedCode = `${this.settings.elnPrefix}-${i.toString().padStart(3, '0')}`;
-                        let testPath = currentFolder ? `${currentFolder}/${suggestedCode}.md` : `${suggestedCode}.md`;
-                        if (!this.app.vault.getAbstractFileByPath(testPath)) break;
-                        i++;
-                    }
-                    new CreateExperimentModal(this.app, suggestedCode, async (expCode) => {
+                    
+                    new CreateExperimentModal(this.app, this, this.settings.elnPrefix, currentFolder, async (expCode) => {
                         await createNewElnExperiment(this.app, expCode, currentFolder, this.settings.elnSections);
                     }).open();
                 });
@@ -268,6 +280,20 @@ export default class ChemEditPlugin extends Plugin {
         addIcon('flask-round', `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="5" d="M 42 35 L 42 55 A 18 18 0 1 0 58 55 L 58 35 Z" stroke-linejoin="round"/><line x1="36" y1="35" x2="64" y2="35" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><line x1="32" y1="65" x2="68" y2="65" stroke="currentColor" stroke-width="4" stroke-dasharray="4 4"/>`);
         
         await this.loadSettings();
+
+        // Print CSS for Clean PDFs
+        const printStyle = document.createElement('style');
+        printStyle.innerHTML = `
+            @media print {
+                .chem-gallery-container input[type="search"],
+                .chem-gallery-container button,
+                div[style*="position: absolute; top: 8px; right: 10px; display: flex; gap: 5px;"] {
+                    display: none !important;
+                }
+            }
+        `;
+        document.head.appendChild(printStyle);
+
         this.addSettingTab(new ChemEditSettingTab(this.app, this));
 
         this.hiddenKetcherContainer = document.createElement('div');
@@ -284,21 +310,56 @@ export default class ChemEditPlugin extends Plugin {
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => { this.openNewDrawingModal(); });
         this.refreshRibbonIcons();
 
-        // KETCHER SVG FILE EXPLORER CONTEXT MENU
+        // FILE EXPLORER CONTEXT MENU
         this.registerEvent(
             this.app.workspace.on('file-menu', (menu, file) => {
-                if (file instanceof TFile && file.extension.toLowerCase() === 'svg') {
-                    menu.addItem((item) => {
-                        item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
-                            const data = await this.app.vault.read(file);
-                            const extracted = extractDataFromSvg(data);
-                            if (extracted) {
-                                new KetcherModal(this, data, "svg", async (newData) => {
-                                    await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
-                                }).open();
-                            } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
+                if (file instanceof TFile) {
+                    const ext = file.extension.toLowerCase();
+                    if (ext === 'svg') {
+                        menu.addItem((item) => {
+                            item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const extracted = extractDataFromSvg(data);
+                                if (extracted) {
+                                    new KetcherModal(this, data, "svg", async (newData) => {
+                                        await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
+                                    }).open();
+                                } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
+                            });
                         });
-                    });
+                    }
+
+                    const activeExts = this.getSupportedExts();
+                    if (activeExts.includes(ext) && ext !== 'svg') {
+                        menu.addSeparator();
+                        menu.addItem((item) => {
+                            item.setTitle("➕ Add to Compound Database").setIcon("flask-round").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const targetFolder = this.settings.elnDirectory || "Library";
+                                addCompoundToDatabase(this.app, this, targetFolder, () => {}, data);
+                            });
+                        });
+                        menu.addItem((item) => {
+                            item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
+                                if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
+                                else new Notice("Could not extract SMILES for NMR prediction.");
+                            });
+                        });
+                    }
+                }
+            })
+        );
+
+        // EDITOR TEXT CONTEXT MENU
+        this.registerEvent(
+            this.app.workspace.on('editor-menu', (menu, editor, view) => {
+                const selection = editor.getSelection().trim();
+                // Ensure we don't accidentally process massive text blocks
+                if (selection && selection.length < 500 && !selection.includes('\n')) {
+                    menu.addSeparator();
+                    this.populateChemicalMenu(menu, selection);
                 }
             })
         );
@@ -311,6 +372,33 @@ export default class ChemEditPlugin extends Plugin {
                     if (isFile) { const cursor = editor.getCursor(); editor.replaceRange(`!${newData}\n`, cursor); editor.setCursor({ line: cursor.line + 1, ch: 0 }); } 
                     else { this.insertSmilesAtCursor(editor, newData, newFormat || "smiles"); }
                 }).open();
+            }
+        });
+
+        this.addCommand({
+            id: 'insert-compound-library',
+            name: 'Insert Compound Library Database',
+            editorCallback: (editor: Editor) => {
+                const template = `\`\`\`chem-db\ntype: library\npath: Library/\nlayout: table\n\`\`\`\n`;
+                editor.replaceSelection(template);
+            }
+        });
+
+        this.addCommand({
+            id: 'insert-inventory-database',
+            name: 'Insert Chemical Inventory Database',
+            editorCallback: (editor: Editor) => {
+                const template = `\`\`\`chem-db\ntype: inventory\npath: Inventory/\nlayout: table\n\`\`\`\n`;
+                editor.replaceSelection(template);
+            }
+        });
+
+        this.addCommand({
+            id: 'insert-eln-gallery',
+            name: 'Insert ELN Experiment Gallery',
+            editorCallback: (editor: Editor) => {
+                const template = `\`\`\`eln-gallery\npath: Experiments/\n\`\`\`\n`;
+                editor.replaceSelection(template);
             }
         });
 
@@ -388,6 +476,11 @@ export default class ChemEditPlugin extends Plugin {
         );
 
         // --- MODULAR PROCESSORS ---
+        this.registerMarkdownCodeBlockProcessor("chem-db", async (source, el, ctx) => {
+            const dbRenderer = new ChemDatabaseRenderer(this);
+            await dbRenderer.renderDatabase(source, el, ctx);
+        });
+
         this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
             const container = document.createElement("div"); el.appendChild(container);
             const elnRenderer = new SharedElnRenderer(this); await elnRenderer.renderElnBlock(source, container, ctx);
@@ -440,7 +533,7 @@ export default class ChemEditPlugin extends Plugin {
         });
 
         this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => {
-            const galleryRenderer = new SharedGalleryRenderer(this); await galleryRenderer.renderGalleryBlock(source, el, ctx);
+            const galleryRenderer = new ElnGalleryRenderer(this); await galleryRenderer.renderGalleryBlock(source, el, ctx);
         });
 
         const fileCodeblockProcessor = async (source: string, el: HTMLElement, ctx: any, defaultFormat: string) => {
@@ -951,50 +1044,68 @@ class SaveFileModal extends Modal {
 class ChemEditSettingTab extends PluginSettingTab {
     plugin: ChemEditPlugin; constructor(app: App, plugin: ChemEditPlugin) { super(app, plugin); this.plugin = plugin; }
     display(): void {
-        const {containerEl} = this; containerEl.empty(); containerEl.createEl('h2', {text: 'ChemEdit Settings'});
+        const {containerEl} = this; containerEl.empty(); 
+        containerEl.createEl('h2', {text: 'ChemEdit Settings'});
         
-        containerEl.createEl('h3', { text: '🧪 General Rendering' });
-        new Setting(containerEl).setName('Image Width').setDesc('Width of the rendered structure blocks (pixels)').addText(text => text.setPlaceholder('300').setValue(this.plugin.settings.width.toString()).onChange(async (v) => { this.plugin.settings.width = parseInt(v) || 300; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Image Height').setDesc('Height of the rendered structure blocks (pixels)').addText(text => text.setPlaceholder('300').setValue(this.plugin.settings.height.toString()).onChange(async (v) => { this.plugin.settings.height = parseInt(v) || 300; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Render SMILES as SVG').setDesc('Uses SVG instead of High-DPI Canvas for SMILES blocks. Looks crisper at extreme zoom levels.').addToggle(toggle => toggle.setValue(this.plugin.settings.useSvgSmiles).onChange(async (value) => { this.plugin.settings.useSvgSmiles = value; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('ChemDraw ACS 1996 Style (Ketcher)').setDesc('Applies the classic ACS Document 1996 drawing settings (bond lengths, fonts, thickness) to Ketcher editors and previews.').addToggle(toggle => toggle.setValue(this.plugin.settings.useAcsSettings).onChange(async (value) => { this.plugin.settings.useAcsSettings = value; await this.plugin.saveSettings(); }));
+        const howtoEl = containerEl.createDiv({ attr: { style: "margin-bottom: 20px; font-size: 14px;" } });
+        howtoEl.innerHTML = `
+            <div style="font-weight: 600; margin-bottom: 5px;">Quick How-To:</div>
+            <ul style="margin: 0; padding-left: 20px; color: var(--text-muted); margin-bottom: 15px;">
+                <li><b>Draw:</b> Click the Hexagon icon in the left ribbon to draw a new structure.</li>
+                <li><b>Embeds:</b> Type <code>![[molecule.mol]]</code> or <code>![[reaction.svg]]</code> directly in any note.</li>
+                <li><b>Databases:</b> Use the Command Palette (<code>Ctrl+P</code>) to insert Library, Inventory, or ELN databases!</li>
+                <li><b>Edit:</b> Double-click any rendered molecule to open Ketcher!</li>
+            </ul>
+            <div>Found a bug or need a feature? <a href="https://github.com/ruzx/obsidian-chemedit/issues" target="_blank">Report it on the ruzx ChemEdit GitHub!</a></div>
+            <hr style="margin-top: 15px; border: 0; border-top: 1px solid var(--background-modifier-border);">
+        `;
 
-        containerEl.createEl('h3', { text: '📚 Compound Library' });
-        new Setting(containerEl).setName('Compound Library File Path').setDesc('Optional: Point to a .md file (e.g. Meta/Compounds.md) that contains markdown tables or lists of your common chemicals. Used for auto-filling the ELN and the Library command.').addText(text => text.setPlaceholder('Meta/Compounds.md').setValue(this.plugin.settings.libraryFilePath).onChange(async (v) => { this.plugin.settings.libraryFilePath = v; await this.plugin.saveSettings(); }));
+        containerEl.createEl('h3', { text: 'Basic Settings' });
 
-        containerEl.createEl('h3', { text: '🔬 Fume Hood & ELN Utilities' });
-        new Setting(containerEl).setName('Show Media Ribbon Icons').setDesc('Turn this on to display the "Take Photo" and "TLC Plate" icons in your left sidebar ribbon.').addToggle(toggle => toggle.setValue(this.plugin.settings.showMediaRibbonIcons).onChange(async (value) => { this.plugin.settings.showMediaRibbonIcons = value; await this.plugin.saveSettings(); this.plugin.refreshRibbonIcons(); }));
-        new Setting(containerEl).setName('Media Images Save Path').setDesc('Folder where camera/TLC pictures will be stored (e.g. Assets/)').addText(text => text.setPlaceholder('Assets/').setValue(this.plugin.settings.mediaSavePath).onChange(async (v) => { this.plugin.settings.mediaSavePath = v; await this.plugin.saveSettings(); }));
-		new Setting(containerEl).setName('Show Blank ELN Icon').setDesc('Display the Flask icon in the sidebar to generate blank experiments.').addToggle(toggle => toggle.setValue(this.plugin.settings.showElnRibbonIcon).onChange(async (value) => { this.plugin.settings.showElnRibbonIcon = value; await this.plugin.saveSettings(); this.plugin.refreshRibbonIcons(); }));
-        new Setting(containerEl).setName('Default ELN Directory').setDesc('Folder where new ELN experiments will be saved by default (e.g. Experiments/). Leave blank to save in the current active folder.').addText(text => text.setPlaceholder('Experiments/').setValue(this.plugin.settings.elnDirectory).onChange(async (v) => { this.plugin.settings.elnDirectory = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Default ELN Directory').setDesc('Folder where new ELN experiments will be saved by default (e.g. Experiments/).').addText(text => text.setPlaceholder('Experiments/').setValue(this.plugin.settings.elnDirectory).onChange(async (v) => { this.plugin.settings.elnDirectory = v; await this.plugin.saveSettings(); }));
         new Setting(containerEl).setName('Default Experiment Prefix').setDesc('Prefix for new ELN files (e.g., EXP, JH, CHEM).').addText(text => text.setPlaceholder('EXP').setValue(this.plugin.settings.elnPrefix).onChange(async (v) => { this.plugin.settings.elnPrefix = v; await this.plugin.saveSettings(); }));
         new Setting(containerEl).setName('Analytical Sections').setDesc('Comma-separated list of sections to auto-generate inside new experiments.').addText(text => text.setPlaceholder('TLC, LCMS, NMR').setValue(this.plugin.settings.elnSections).onChange(async (v) => { this.plugin.settings.elnSections = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Compound Library File Path').setDesc('Optional: Point to a .md file (e.g. Meta/Compounds.md) that contains markdown tables or lists of your common chemicals. Used for auto-filling the ELN and the Library command.').addText(text => text.setPlaceholder('Meta/Compounds.md').setValue(this.plugin.settings.libraryFilePath).onChange(async (v) => { this.plugin.settings.libraryFilePath = v; await this.plugin.saveSettings(); }));
+        new Setting(containerEl).setName('Show Ribbon Icons').setDesc('Toggle Fume Hood Utilities (Flask, Camera, TLC) in the left sidebar.').addToggle(toggle => toggle.setValue(this.plugin.settings.showElnRibbonIcon).onChange(async (value) => { this.plugin.settings.showElnRibbonIcon = value; this.plugin.settings.showMediaRibbonIcons = value; await this.plugin.saveSettings(); this.plugin.refreshRibbonIcons(); }));
 
-        containerEl.createEl('h3', { text: '🖱️ Context Menu (Right-Click)' });
-        containerEl.createEl('div', { cls: 'setting-item-description', text: 'Customize the links in the right-click menu for SMILES blocks. Use {{smiles}} to inject the structure.' }).style.marginBottom = "10px";
-        new Setting(containerEl).setName('Custom Link 1 Name').addText(text => text.setValue(this.plugin.settings.contextUrl1Name).onChange(async (v) => { this.plugin.settings.contextUrl1Name = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 1 URL').addText(text => text.setValue(this.plugin.settings.contextUrl1).onChange(async (v) => { this.plugin.settings.contextUrl1 = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 2 Name').addText(text => text.setValue(this.plugin.settings.contextUrl2Name).onChange(async (v) => { this.plugin.settings.contextUrl2Name = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 2 URL').addText(text => text.setValue(this.plugin.settings.contextUrl2).onChange(async (v) => { this.plugin.settings.contextUrl2 = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 3 Name').addText(text => text.setValue(this.plugin.settings.contextUrl3Name).onChange(async (v) => { this.plugin.settings.contextUrl3Name = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 3 URL').addText(text => text.setValue(this.plugin.settings.contextUrl3).onChange(async (v) => { this.plugin.settings.contextUrl3 = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 4 Name').addText(text => text.setValue(this.plugin.settings.contextUrl4Name).onChange(async (v) => { this.plugin.settings.contextUrl4Name = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Custom Link 4 URL').addText(text => text.setValue(this.plugin.settings.contextUrl4).onChange(async (v) => { this.plugin.settings.contextUrl4 = v; await this.plugin.saveSettings(); }));
+        const advancedToggleBtn = containerEl.createEl('button', { text: "⚙️ Show Advanced Options", attr: { style: "margin-top: 20px; margin-bottom: 10px; width: 100%; font-weight: 600;" } });
+        const advancedSection = containerEl.createDiv({ attr: { style: "display: none; padding-top: 10px;" } });
 
-        containerEl.createEl('h3', { text: '📋 Smart Paste & Embeds' });
-        new Setting(containerEl).setName('Auto-format pasted SMILES').setDesc('Automatically wrap pasted SMILES strings in a codeblock so they render as images instantly.').addToggle(toggle => toggle.setValue(this.plugin.settings.smartPasteSmiles).onChange(async (value) => { this.plugin.settings.smartPasteSmiles = value; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Auto-format pasted MOL text').setDesc('Automatically wrap pasted MOL files (from ChemDraw/Marvin) in a codeblock.').addToggle(toggle => toggle.setValue(this.plugin.settings.smartPasteMol).onChange(async (value) => { this.plugin.settings.smartPasteMol = value; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Supported File Extensions').setDesc('Comma-separated list of extensions that should render chemical views automatically via ![[file.ext]] embeds.').addText(text => text.setPlaceholder('mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, helm').setValue(this.plugin.settings.supportedEmbedExtensions).onChange(async (v) => { this.plugin.settings.supportedEmbedExtensions = v; await this.plugin.saveSettings(); }));
+        advancedToggleBtn.onclick = () => {
+            if (advancedSection.style.display === "none") { advancedSection.style.display = "block"; advancedToggleBtn.innerText = "Hide Advanced Options"; } 
+            else { advancedSection.style.display = "none"; advancedToggleBtn.innerText = "⚙️ Show Advanced Options"; }
+        };
 
-        containerEl.createEl('h3', { text: '📝 Inline Structures' });
-        new Setting(containerEl).setName('Inline Image Width').setDesc('Max width for structures rendered inline (e.g. $smiles=...)').addText(text => text.setPlaceholder('150').setValue(this.plugin.settings.inlineWidth.toString()).onChange(async (v) => { this.plugin.settings.inlineWidth = parseInt(v) || 150; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Inline Image Height').setDesc('Max height for structures rendered inline').addText(text => text.setPlaceholder('150').setValue(this.plugin.settings.inlineHeight.toString()).onChange(async (v) => { this.plugin.settings.inlineHeight = parseInt(v) || 150; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Inline SMILES Prefix').setDesc('Text prefix used to trigger inline SMILES rendering').addText(text => text.setValue(this.plugin.settings.inlineSmilesPrefix).onChange(async (v) => { this.plugin.settings.inlineSmilesPrefix = v; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Inline File Prefix').setDesc('Text prefix used to trigger inline .mol and .cdxml rendering').addText(text => text.setValue(this.plugin.settings.inlineMolPrefix).onChange(async (v) => { this.plugin.settings.inlineMolPrefix = v; await this.plugin.saveSettings(); }));
+        advancedSection.createEl('h3', { text: '🧪 General Rendering' });
+        new Setting(advancedSection).setName('Image Size (Block Embeds)').setDesc('Width and Height of the rendered structure blocks (pixels)').addText(text => text.setPlaceholder('Width (300)').setValue(this.plugin.settings.width.toString()).onChange(async (v) => { this.plugin.settings.width = parseInt(v) || 300; await this.plugin.saveSettings(); })).addText(text => text.setPlaceholder('Height (300)').setValue(this.plugin.settings.height.toString()).onChange(async (v) => { this.plugin.settings.height = parseInt(v) || 300; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Render SMILES as SVG').setDesc('Uses SVG instead of High-DPI Canvas for SMILES blocks. Looks crisper at extreme zoom levels.').addToggle(toggle => toggle.setValue(this.plugin.settings.useSvgSmiles).onChange(async (value) => { this.plugin.settings.useSvgSmiles = value; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('ChemDraw ACS 1996 Style (Ketcher)').setDesc('Applies the classic ACS Document 1996 drawing settings (bond lengths, fonts, thickness) to Ketcher editors and previews.').addToggle(toggle => toggle.setValue(this.plugin.settings.useAcsSettings).onChange(async (value) => { this.plugin.settings.useAcsSettings = value; await this.plugin.saveSettings(); }));
 
-        containerEl.createEl('h3', { text: '🎨 Theming' });
+        advancedSection.createEl('h3', { text: '🔬 Fume Hood Utilities' });
+        new Setting(advancedSection).setName('Media Images Save Path').setDesc('Folder where camera/TLC pictures will be stored (e.g. Assets/)').addText(text => text.setPlaceholder('Assets/').setValue(this.plugin.settings.mediaSavePath).onChange(async (v) => { this.plugin.settings.mediaSavePath = v; await this.plugin.saveSettings(); }));
+        
+        advancedSection.createEl('h3', { text: '🖱️ Context Menu (Right-Click)' });
+        advancedSection.createEl('div', { cls: 'setting-item-description', text: 'Customize the links in the right-click menu for SMILES blocks. Use {{smiles}} to inject the structure.' }).style.marginBottom = "10px";
+        new Setting(advancedSection).setName('Custom Link 1 Name').addText(text => text.setValue(this.plugin.settings.contextUrl1Name).onChange(async (v) => { this.plugin.settings.contextUrl1Name = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 1 URL').addText(text => text.setValue(this.plugin.settings.contextUrl1).onChange(async (v) => { this.plugin.settings.contextUrl1 = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 2 Name').addText(text => text.setValue(this.plugin.settings.contextUrl2Name).onChange(async (v) => { this.plugin.settings.contextUrl2Name = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 2 URL').addText(text => text.setValue(this.plugin.settings.contextUrl2).onChange(async (v) => { this.plugin.settings.contextUrl2 = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 3 Name').addText(text => text.setValue(this.plugin.settings.contextUrl3Name).onChange(async (v) => { this.plugin.settings.contextUrl3Name = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 3 URL').addText(text => text.setValue(this.plugin.settings.contextUrl3).onChange(async (v) => { this.plugin.settings.contextUrl3 = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 4 Name').addText(text => text.setValue(this.plugin.settings.contextUrl4Name).onChange(async (v) => { this.plugin.settings.contextUrl4Name = v; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Custom Link 4 URL').addText(text => text.setValue(this.plugin.settings.contextUrl4).onChange(async (v) => { this.plugin.settings.contextUrl4 = v; await this.plugin.saveSettings(); }));
+
+        advancedSection.createEl('h3', { text: '📋 Smart Paste & Embeds' });
+        new Setting(advancedSection).setName('Auto-format pasted SMILES').setDesc('Automatically wrap pasted SMILES strings in a codeblock so they render as images instantly.').addToggle(toggle => toggle.setValue(this.plugin.settings.smartPasteSmiles).onChange(async (value) => { this.plugin.settings.smartPasteSmiles = value; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Auto-format pasted MOL text').setDesc('Automatically wrap pasted MOL files (from ChemDraw/Marvin) in a codeblock.').addToggle(toggle => toggle.setValue(this.plugin.settings.smartPasteMol).onChange(async (value) => { this.plugin.settings.smartPasteMol = value; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Supported File Extensions').setDesc('Comma-separated list of extensions that should render chemical views automatically via ![[file.ext]] embeds.').addText(text => text.setPlaceholder('mol, cdxml, ket, sdf, rxn, inchi, smarts, svg, fasta, helm').setValue(this.plugin.settings.supportedEmbedExtensions).onChange(async (v) => { this.plugin.settings.supportedEmbedExtensions = v; await this.plugin.saveSettings(); }));
+
+        advancedSection.createEl('h3', { text: '📝 Inline Structures' });
+        new Setting(advancedSection).setName('Inline Image Size').setDesc('Max width/height for structures rendered inline').addText(text => text.setPlaceholder('Width (150)').setValue(this.plugin.settings.inlineWidth.toString()).onChange(async (v) => { this.plugin.settings.inlineWidth = parseInt(v) || 150; await this.plugin.saveSettings(); })).addText(text => text.setPlaceholder('Height (150)').setValue(this.plugin.settings.inlineHeight.toString()).onChange(async (v) => { this.plugin.settings.inlineHeight = parseInt(v) || 150; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Inline Prefixes').setDesc('Text prefixes used to trigger inline rendering').addText(text => text.setPlaceholder('SMILES ($smiles=)').setValue(this.plugin.settings.inlineSmilesPrefix).onChange(async (v) => { this.plugin.settings.inlineSmilesPrefix = v; await this.plugin.saveSettings(); })).addText(text => text.setPlaceholder('Files ($mol=)').setValue(this.plugin.settings.inlineMolPrefix).onChange(async (v) => { this.plugin.settings.inlineMolPrefix = v; await this.plugin.saveSettings(); }));
+
+        advancedSection.createEl('h3', { text: '🎨 Theming' });
         const themeOptions = { 'light': 'Light', 'dark': 'Dark', 'oldschool': 'Oldschool (B&W)', 'solarized': 'Solarized Light', 'solarized-dark': 'Solarized Dark', 'matrix': 'Matrix', 'cyberpunk': 'Cyberpunk' };
-        new Setting(containerEl).setName('Light Theme').addDropdown(dropdown => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.lightTheme).onChange(async (value) => { this.plugin.settings.lightTheme = value; await this.plugin.saveSettings(); }));
-        new Setting(containerEl).setName('Dark Theme').addDropdown(dropdown => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.darkTheme).onChange(async (value) => { this.plugin.settings.darkTheme = value; await this.plugin.saveSettings(); }));
+        new Setting(advancedSection).setName('Themes').setDesc('Light and Dark mode rendering themes.').addDropdown(dropdown => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.lightTheme).onChange(async (value) => { this.plugin.settings.lightTheme = value; await this.plugin.saveSettings(); })).addDropdown(dropdown => dropdown.addOptions(themeOptions).setValue(this.plugin.settings.darkTheme).onChange(async (value) => { this.plugin.settings.darkTheme = value; await this.plugin.saveSettings(); }));
     }
 }

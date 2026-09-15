@@ -1,3 +1,4 @@
+// SharedGallery.ts
 import { App, TFile, Notice } from 'obsidian';
 
 export class SharedGalleryRenderer {
@@ -7,7 +8,7 @@ export class SharedGalleryRenderer {
         this.plugin = plugin;
     }
 
-    async renderGalleryBlock(source: string, el: HTMLElement, ctx: any) {
+    async renderChemGallery(source: string, el: HTMLElement, ctx: any) {
         // Parse the folder path
         const match = source.match(/path:\s*['"]?(.*?)['"]?(?:\n|$)/);
         const folderPath = match ? match[1].trim() : "";
@@ -181,5 +182,10 @@ export class SharedGalleryRenderer {
             });
             countLabel.textContent = `${visibleCount} / ${renderCount} molecules`;
         });
+    }
+
+    // Safety fallback just in case it's called with the old name
+    async renderGalleryBlock(source: string, el: HTMLElement, ctx: any) {
+        return this.renderChemGallery(source, el, ctx);
     }
 }
