@@ -693,7 +693,7 @@ export default class ChemEditPlugin extends Plugin {
     bootHeadlessKetcher() {
         if (this.headlessKetcher || this.headlessRoot) return;
         const element = React.createElement(KetcherReact, {
-            data: "C", onInit: async (ketcher: any) => { 
+            data: "", onInit: async (ketcher: any) => {  // <--- CHANGED "C" to ""
                 this.headlessKetcher = ketcher; 
                 if (this.settings.useAcsSettings) { try { await ketcher.setSettings({ bondThickness: 1.2, bondLength: 20, stereoBondWidth: 3, fontsz: 10, fontszsub: 7, hashSpacing: 1.5 }); } catch (e) {} }
                 setTimeout(() => this.processHeadlessQueue(), 500); 

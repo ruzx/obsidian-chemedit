@@ -1,6 +1,6 @@
 // SharedContextMenu.ts
 import { Menu, Notice, requestUrl } from 'obsidian';
-import { AddToLibraryModal, addCompoundToLibrary } from './SharedEln';
+import { AddToLibraryModal, addCompoundToLibrary, calculateMwOffline } from './SharedEln';
 
 export function showChemicalContextMenu(plugin: any, e: MouseEvent, smiles: string) {
     e.preventDefault();
@@ -57,16 +57,14 @@ export function showChemicalContextMenu(plugin: any, e: MouseEvent, smiles: stri
     });
 
     menu.addItem((item) => {
-        item.setTitle("Copy MW & Formula (Web)").setIcon("info").onClick(async () => {
+        item.setTitle("Copy MW & Formula").setIcon("info").onClick(async () => {
             try {
-                const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(smiles)}/property/MolecularWeight,MolecularFormula/JSON`);
-                if (res.status === 200) { 
-                    const p = res.json?.PropertyTable?.Properties?.[0];
-                    if (p && p.MolecularFormula && p.MolecularWeight) {
-                        await navigator.clipboard.writeText(`Formula: ${p.MolecularFormula}, MW: ${p.MolecularWeight}`); 
-                        new Notice("Properties copied!"); 
-                    } else { new Notice("Properties not found."); }
-                }
+                new Notice("Calculating properties...");
+                const props = await calculateMwOffline(smiles, plugin);
+                if (props && props.mw > 0) {
+                    await navigator.clipboard.writeText(`Formula: ${props.formula}, MW: ${props.mw.toFixed(2)}`); 
+                    new Notice(`Copied: Formula: ${props.formula}, MW: ${props.mw.toFixed(2)}`); 
+                } else { new Notice("Properties not found."); }
             } catch(err) { new Notice("Error fetching properties."); }
         });
     });

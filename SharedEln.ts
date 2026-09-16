@@ -4,42 +4,89 @@ import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
 import { ChemDataEngine } from './ChemDataEngine';
 
 // ------------------------------------------------------------------
-// OFFLINE MOLECULAR WEIGHT CALCULATOR (OpenChemLib + Web Fallback)
+// OFFLINE MOLECULAR WEIGHT CALCULATOR (Indigo Primary + OpenChemLib + Web Fallback)
 // ------------------------------------------------------------------
 export async function calculateMwOffline(smiles: string, plugin?: any): Promise<{ mw: number, formula: string }> {
     try {
         let cleanSmiles = smiles.split(' |')[0].trim();
         
-        // 1. Primary Offline Engine (OpenChemLib)
-        let props = ChemDataEngine.getPropertiesFromSmiles(cleanSmiles);
+        // 1. Strip stereobonds globally right away. 
+        // They do not affect MW/Formula, but they cause parsing bugs in OpenChemLib and PubChem APIs.
+        const sForMw = cleanSmiles.replace(/[\/\\]/g, '');
 
-        // 2. Headless Ketcher Normalizer (Solves bugs with complex aromatics offline)
-        if (!props && plugin && plugin.headlessKetcher) {
-            try {
-                await plugin.headlessKetcher.setMolecule(cleanSmiles);
-                const molBlock = await plugin.headlessKetcher.getMolfile();
-                if ((ChemDataEngine as any).getPropertiesFromMolblock) {
-                    props = (ChemDataEngine as any).getPropertiesFromMolblock(molBlock);
+        if (plugin) {
+            // 2. Wait for Ketcher engine to boot up (max 5 seconds)
+            let bootWait = 0;
+            while (!plugin.headlessKetcher && bootWait < 50) {
+                await new Promise(r => setTimeout(r, 100));
+                bootWait++;
+            }
+
+            // 3. Primary Engine: Ketcher (Matches Ketcher UI exactly, highly accurate Indigo backend)
+            if (plugin.headlessKetcher && typeof plugin.headlessKetcher.calculate === 'function') {
+                let timeout = 0;
+                // Wait for Ketcher to be free (it might be generating SVGs)
+                while (plugin.isProcessingHeadless && timeout < 100) { 
+                    await new Promise(r => setTimeout(r, 50));
+                    timeout++;
                 }
-            } catch(e) {}
+                
+                if (!plugin.isProcessingHeadless) {
+                    plugin.isProcessingHeadless = true; // Acquire Lock
+                    try {
+                        const calcTask = async () => {
+                            // Clear canvas first, set molecule, then wait a tick for Redux to sync state
+                            await plugin.headlessKetcher.setMolecule("");
+                            await plugin.headlessKetcher.setMolecule(sForMw);
+                            await new Promise(r => setTimeout(r, 50)); 
+                            return await plugin.headlessKetcher.calculate();
+                        };
+
+                        const ketcherProps = await Promise.race([
+                            calcTask(),
+                            new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Ketcher timeout")), 3000))
+                        ]);
+
+                        if (ketcherProps && ketcherProps['molecular-weight']) {
+                            const mw = Number(ketcherProps['molecular-weight']);
+                            const formula = ketcherProps['gross'] || "";
+                            
+                            // If it successfully calculated a mass > 0, return it
+                            if (!isNaN(mw) && mw > 0) {
+                                return { mw, formula };
+                            }
+                        }
+                    } catch(e) {
+                        console.warn("ChemEdit: Headless MW calculation failed, falling back to OCL/Web.", e);
+                    } finally {
+                        plugin.isProcessingHeadless = false; // ALWAYS Release Lock
+                        // Trigger queue processing if SVGs piled up while we were calculating
+                        if (plugin.headlessQueue && plugin.headlessQueue.length > 0) {
+                            setTimeout(() => plugin.processHeadlessQueue(), 10);
+                        }
+                    }
+                }
+            }
         }
 
+        // 4. Offline Fallback: OpenChemLib
+        let props = ChemDataEngine.getPropertiesFromSmiles(sForMw);
         if (props && props.mw > 0) {
             return { mw: props.mw, formula: props.formula };
         }
 
-        // 3. Web Fallback 1: NCI Cactus (Excellent for tautomers and metal complexes)
+        // 5. Web Fallback 1: NCI Cactus
         try {
-            const mwRes = await requestUrl(`https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(cleanSmiles)}/mw`);
-            const formulaRes = await requestUrl(`https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(cleanSmiles)}/formula`);
+            const mwRes = await requestUrl(`https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(sForMw)}/mw`);
+            const formulaRes = await requestUrl(`https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(sForMw)}/formula`);
             if (mwRes.status === 200 && formulaRes.status === 200) {
                 return { mw: parseFloat(mwRes.text), formula: formulaRes.text.trim() };
             }
         } catch (e) {}
 
-        // 4. Web Fallback 2: PubChem
+        // 6. Web Fallback 2: PubChem
         try {
-            const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(cleanSmiles)}/property/MolecularWeight,MolecularFormula/JSON`);
+            const res = await requestUrl(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(sForMw)}/property/MolecularWeight,MolecularFormula/JSON`);
             if (res.status === 200) {
                 const p = res.json.PropertyTable.Properties[0];
                 return { mw: parseFloat(p.MolecularWeight), formula: p.MolecularFormula };
@@ -48,7 +95,7 @@ export async function calculateMwOffline(smiles: string, plugin?: any): Promise<
 
     } catch(e) {}
     
-    // 5. Absolute text-based fallback
+    // 7. Absolute text-based fallback
     return fallbackMW(smiles);
 }
 

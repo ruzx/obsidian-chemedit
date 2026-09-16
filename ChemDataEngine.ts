@@ -8,7 +8,12 @@ export class ChemDataEngine {
         try {
             let cleanSmiles = smiles.split(' |')[0].trim();
             const s = cleanSmiles.includes('>>') ? cleanSmiles.split('>>')[1] : cleanSmiles;
-            const mol = OCL.Molecule.fromSmiles(s);
+            
+            // OCL Bug #4 Patch: Strip directional stereo bonds before calculating properties 
+            // so OpenChemLib doesn't add implicit hydrogens to conjugated rings.
+            const sForMw = s.replace(/[\/\\]/g, '');
+            
+            const mol = OCL.Molecule.fromSmiles(sForMw);
             return ChemDataEngine.extractProps(mol);
         } catch (e) {
             return null; // Fails here if it hits complex transition metals like Pd/Fe
@@ -58,7 +63,10 @@ export class ChemDataEngine {
             const smilesList = targetSmiles.includes('>>') ? targetSmiles.split('>>').flatMap(s => s.split('.')) : targetSmiles.split('.');
 
             let queryMol;
-            try { queryMol = OCL.Molecule.fromSmiles(querySmilesOrSmarts); } 
+            try { 
+                const qForMatch = querySmilesOrSmarts.replace(/[\/\\]/g, '');
+                queryMol = OCL.Molecule.fromSmiles(qForMatch); 
+            } 
             catch(e) { queryMol = OCL.Molecule.fromSmarts(querySmilesOrSmarts); }
             
             queryMol.setFragment(true); 
@@ -69,7 +77,8 @@ export class ChemDataEngine {
                 if (!smi) continue;
                 try {
                     const cleanSmi = smi.split(' |')[0].trim();
-                    const targetMol = OCL.Molecule.fromSmiles(cleanSmi);
+                    const sForMatch = cleanSmi.replace(/[\/\\]/g, '');
+                    const targetMol = OCL.Molecule.fromSmiles(sForMatch);
                     searcher.setMolecule(targetMol);
                     if (searcher.isFragmentInMolecule()) return true;
                 } catch(err) {}
