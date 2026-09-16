@@ -62,6 +62,10 @@ ELN editable field (double click) demo:
 <img width="400" alt="Recording2026-09-16083540-ezgif com-optimize" src="https://github.com/user-attachments/assets/cba8c9a6-3956-4deb-bf67-e64403bf57c5" />
 
 
+chem-db for ELN Database demo substructure search example:
+
+<img width="400" alt="20260916_084657_21-ezgif com-optimize" src="https://github.com/user-attachments/assets/3b86f026-e3cc-4336-ac9e-111bdcf8606a" />
+
 
 
 ### 🚀 What's New in ChemEdit 1.3.3 - 1.3.4
