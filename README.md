@@ -7,13 +7,13 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 ### Quick Demo
 
 
-<img width="800" height="874" alt="chemedit demo new" src="https://github.com/user-attachments/assets/9d282240-cb11-434c-a60f-466b912d9b04" />
+<img width="800" alt="chemedit demo new" src="https://github.com/user-attachments/assets/9d282240-cb11-434c-a60f-466b912d9b04" />
 
 
 #### ELN Quick Demo
 
 
-<img width="800" height="900" alt="ELNquckdemo-ezgif com-optimize" src="https://github.com/user-attachments/assets/5a4a6d77-9652-4501-8ce9-5ff0cb226953" />
+<img width="800" alt="ELNquckdemo-ezgif com-optimize" src="https://github.com/user-attachments/assets/5a4a6d77-9652-4501-8ce9-5ff0cb226953" />
 
 📝 Release Notes
 
@@ -56,8 +56,10 @@ type: inventory
 folder: _mobile_obsidian/Chemical_Inventory
 ```</code></pre>
 
-<img width="230" alt="image" src="https://github.com/user-attachments/assets/ea5505a7-538a-440c-be8a-28dda7a1bfec" />
-<img width="230" alt="image" src="https://github.com/user-attachments/assets/a90ab543-0f1c-464e-abad-b7a7975df0c2" />
+ELN editable field (double click) demo:
+
+
+<img width="400" alt="Recording2026-09-16083540-ezgif com-optimize" src="https://github.com/user-attachments/assets/cba8c9a6-3956-4deb-bf67-e64403bf57c5" />
 
 
 
