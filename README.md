@@ -17,10 +17,10 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 📝 Release Notes
 
-### 🚀 What's New in ChemEdit 1.3.5-1.3.6
+### 🚀 What's New in ChemEdit 1.3.5-1.3.7
 
-- Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g.,
-    geometric isomers). (thanks @ignorgchem!).
+- Fixed MW (changed engine) auto-calculation bugs for complex stereobonds conjugated to aromatic rings (e.g., `/` or `\` next to ring closures `C=1`) (thanks @Snipinium!).
+- Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g., geometric isomers). (thanks @ignorgchem!).
 - Fixed MW auto-calculation bugs for atoms like P and S (thanks @Snipinium!).
 - Added **inline editing** to ELN tables: double-click Eq, Mass, Temp, or Solvent to edit.
 - Added basic support for **drawing full reactions** in the ELN editor (it will try to parse reactants and products from the arrow).
@@ -65,7 +65,6 @@ ELN editable field (double click) demo:
 chem-db for ELN Database demo substructure search example:
 
 <img width="400" alt="20260916_084657_21-ezgif com-optimize" src="https://github.com/user-attachments/assets/3b86f026-e3cc-4336-ac9e-111bdcf8606a" />
-
 
 
 ### 🚀 What's New in ChemEdit 1.3.3 - 1.3.4
