@@ -155,23 +155,15 @@ export async function getCompoundLibrary(plugin: any): Promise<{name: string, sm
             for (const line of lines) {
                 if (line.trim().startsWith('|')) {
                     const parts = line.split('|').map(p => p.trim());
-                    if (parts.length >= 3) {
-                        const name = parts[1];
-                        const smiles = parts[2];
-                        if (name && smiles && !name.includes('---') && name.toLowerCase() !== 'name') {
-                            results.push({name, smiles});
-                        }
+                    if (parts.length >= 3 && parts[1] && parts[2] && !parts[1].includes('---') && parts[1].toLowerCase() !== 'name') {
+                        results.push({name: parts[1], smiles: parts[2]});
                     }
                 }
                 const listMatch = line.match(/^-\s+(.+?):\s+(.+)$/);
-                if (listMatch) {
-                    results.push({name: listMatch[1].trim(), smiles: listMatch[2].trim()});
-                }
+                if (listMatch) results.push({name: listMatch[1].trim(), smiles: listMatch[2].trim()});
             }
             if (results.length > 0) return results;
-        } catch (e) {
-            console.error("ChemEdit: Failed to read custom library file", e);
-        }
+        } catch (e) {}
     }
     return DEFAULT_LIBRARY;
 }
@@ -202,61 +194,31 @@ export async function addCompoundToLibrary(plugin: any, name: string, smiles: st
 export class CompoundSuggestModal extends FuzzySuggestModal<{name: string, smiles: string}> {
     library: {name: string, smiles: string}[];
     onChoose: (result: {name: string, smiles: string}) => void;
-
     constructor(app: App, library: {name: string, smiles: string}[], onChoose: (result: {name: string, smiles: string}) => void) {
-        super(app);
-        this.library = library;
-        this.onChoose = onChoose;
-        this.setPlaceholder("Search compound library...");
+        super(app); this.library = library; this.onChoose = onChoose; this.setPlaceholder("Search compound library...");
     }
-
     getItems() { return this.library; }
     getItemText(item: {name: string, smiles: string}) { return item.name; }
-    onChooseItem(item: {name: string, smiles: string}, evt: MouseEvent | KeyboardEvent) {
-        this.onChoose(item);
-    }
+    onChooseItem(item: {name: string, smiles: string}, evt: MouseEvent | KeyboardEvent) { this.onChoose(item); }
 }
 
 export class AddToLibraryModal extends Modal {
-    name: string = "";
-    smiles: string;
-    onSubmit: (name: string, smiles: string) => void;
-
-    constructor(app: App, smiles: string, onSubmit: (name: string, smiles: string) => void) {
-        super(app);
-        this.smiles = smiles;
-        this.onSubmit = onSubmit;
-    }
-
+    name: string = ""; smiles: string; onSubmit: (name: string, smiles: string) => void;
+    constructor(app: App, smiles: string, onSubmit: (name: string, smiles: string) => void) { super(app); this.smiles = smiles; this.onSubmit = onSubmit; }
     onOpen() {
         const { contentEl } = this;
         contentEl.createEl("h3", { text: "Add to Compound Library" });
-        
         contentEl.createEl("p", { text: `SMILES: ${this.smiles.substring(0, 50)}${this.smiles.length > 50 ? '...' : ''}`, cls: "color-text-muted", attr: {style: "font-family: monospace; font-size: 11px; word-break: break-all;"} });
-
         const input = contentEl.createEl("input", { type: "text", placeholder: "Compound Name (e.g. THF)" });
-        input.style.width = "100%";
-        input.style.marginBottom = "15px";
+        input.style.width = "100%"; input.style.marginBottom = "15px";
         input.onchange = (e: any) => this.name = e.target.value;
-
         const btnRow = contentEl.createDiv({ attr: {style: "display:flex; justify-content:flex-end; gap: 10px;"}});
-        const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
-        cancelBtn.onclick = () => this.close();
-        
+        const cancelBtn = btnRow.createEl("button", { text: "Cancel" }); cancelBtn.onclick = () => this.close();
         const btn = btnRow.createEl("button", { text: "Add to Library", cls: "mod-cta" });
-        btn.onclick = () => {
-            if (!this.name.trim()) { new Notice("Please enter a name."); return; }
-            this.onSubmit(this.name.trim(), this.smiles);
-            this.close();
-        };
-
-        input.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") btn.click();
-        });
-
+        btn.onclick = () => { if (!this.name.trim()) { new Notice("Please enter a name."); return; } this.onSubmit(this.name.trim(), this.smiles); this.close(); };
+        input.addEventListener("keypress", (e) => { if (e.key === "Enter") btn.click(); });
         setTimeout(() => input.focus(), 50);
     }
-
     onClose() { this.contentEl.empty(); }
 }
 
@@ -351,20 +313,11 @@ export class SharedElnRenderer {
             const safeSource = source.replace(/smiles:\s*(.*)$/gm, (match, p1) => {
                 let s = p1.trim();
                 if (!s) return match;
-                
                 let comment = "";
                 const commentMatch = s.match(/(\s+#.*)$/);
-                if (commentMatch) {
-                    comment = commentMatch[1];
-                    s = s.substring(0, s.length - comment.length).trim();
-                }
-                
-                if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-                    s = s.substring(1, s.length - 1);
-                }
-                
-                s = s.replace(/\\"/g, '"');
-                s = s.replace(/'/g, "''"); // escape single quotes for YAML
+                if (commentMatch) { comment = commentMatch[1]; s = s.substring(0, s.length - comment.length).trim(); }
+                if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.substring(1, s.length - 1);
+                s = s.replace(/\\"/g, '"'); s = s.replace(/'/g, "''"); 
                 return `smiles: '${s}'${comment}`;
             });
             
@@ -394,14 +347,13 @@ export class SharedElnRenderer {
             const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
             const currentFile = view ? view.file : null;
             const expCode = data.code || (currentFile ? currentFile.basename : "EXP");
-            const filePrefix = expCode ? `${expCode}_` : "";
+            const filePrefix = expCode ? `${expCode.replace(/[/\\?%*:|"<>]/g, '-')}_` : "";
 
             wrapper.innerHTML = '';
 
-            // --- INLINE EDITING LISTENER (WITH SCROLL PRESERVATION) ---
+            // --- INLINE EDITING LISTENER (TEXT CELLS) ---
             wrapper.addEventListener('dblclick', (e) => {
                 let target = e.target as HTMLElement;
-                
                 while (target && target !== wrapper && !target.classList.contains('eln-editable')) {
                     target = target.parentElement as HTMLElement;
                 }
@@ -435,8 +387,9 @@ export class SharedElnRenderer {
                     input.focus();
 
                     const finishEdit = () => {
-                        const newValStr = input.value.trim().replace(/,/g, '.'); // Handle European commas
-                        const info = ctx.getSectionInfo(el.parentElement || el);
+                        const newValStr = input.value.trim().replace(/,/g, '.'); 
+                        let info = ctx.getSectionInfo(el);
+                        if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
                         
                         if (view && info) {
                             const scrollInfo = view.editor.getScrollInfo();
@@ -450,20 +403,17 @@ export class SharedElnRenderer {
                                 if (inputType === 'number') {
                                     const num = parseFloat(newValStr);
                                     valToSave = isNaN(num) ? undefined : num;
-                                } else {
-                                    valToSave = newValStr === '' ? undefined : newValStr;
-                                }
+                                } else { valToSave = newValStr === '' ? undefined : newValStr; }
 
                                 if (type === 'root') {
                                     if (valToSave === undefined) delete yamlObj[key];
                                     else yamlObj[key] = valToSave;
                                 } else {
                                     if (!yamlObj[type!]) yamlObj[type!] = [];
-                                    if (!yamlObj[type!][idx]) yamlObj[type!][idx] = {};
+                                    if (!yamlObj[type!][idx]) yamlObj[type!] = {};
                                     
-                                    if (valToSave === undefined) {
-                                        delete yamlObj[type!][idx][key];
-                                    } else {
+                                    if (valToSave === undefined) { delete yamlObj[type!][idx][key]; } 
+                                    else {
                                         yamlObj[type!][idx][key] = valToSave;
                                         if (key === 'mmol') { delete yamlObj[type!][idx].mass; delete yamlObj[type!][idx].volume; }
                                         else if (key === 'mass') { delete yamlObj[type!][idx].mmol; delete yamlObj[type!][idx].volume; }
@@ -475,7 +425,6 @@ export class SharedElnRenderer {
                                 
                                 yamlObj = ElnCalculator.calculate(yamlObj);
                                 const newYaml = stringifyYaml(yamlObj);
-                                
                                 view.editor.replaceRange(newYaml, {line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
                                 
                                 setTimeout(() => {
@@ -532,17 +481,51 @@ export class SharedElnRenderer {
                     }
                     editor.replaceRange(`\n${text}\n`, { line: insertLine, ch: 0 });
                 } else {
-                    const info = ctx.getSectionInfo(el.parentElement || el);
+                    let info = ctx.getSectionInfo(el);
+                    if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
                     if (info) editor.replaceRange(`\n${text}\n`, { line: info.lineEnd + 1, ch: 0 });
                 }
             };
+
+            const updateYamlState = (mutate: (y: any) => void) => {
+                if (!view) return;
+                let info = ctx.getSectionInfo(el);
+                if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
+                if (!info) return;
+                const { parseYaml, stringifyYaml } = require('obsidian');
+                const blockText = view.editor.getRange({line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
+                try {
+                    const yamlObj = parseYaml(blockText);
+                    mutate(yamlObj);
+                    const newYaml = stringifyYaml(yamlObj);
+                    view.editor.replaceRange(newYaml, {line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
+                } catch (err) {}
+            };
+
+            // Status Menu Button
+            createBtn("⚙️ Status", "Change Experiment Status", (e?: MouseEvent) => {
+                if (!e) return;
+                const menu = new Menu();
+                menu.addItem((item) => item.setTitle("Mark as Planned").setIcon("calendar").onClick(() => updateYamlState(y => y.status = "Planned")));
+                menu.addItem((item) => item.setTitle("Mark as Running").setIcon("play").onClick(() => updateYamlState(y => y.status = "Running")));
+                menu.addItem((item) => item.setTitle("Mark as Completed").setIcon("check").onClick(() => updateYamlState(y => y.status = "Completed")));
+                menu.addItem((item) => item.setTitle("Mark as Failed").setIcon("cross").onClick(() => updateYamlState(y => y.status = "Failed")));
+                menu.addSeparator();
+                menu.addItem((item) => item.setTitle("Recalculate MWs").setIcon("refresh-cw").onClick(() => {
+                    updateYamlState(y => {
+                        y.reactants?.forEach((r:any) => { delete r.mw; delete r.formula; });
+                        y.products?.forEach((p:any) => { delete p.mw; delete p.formula; });
+                    });
+                    new Notice("Molecular weights recalculated!");
+                }));
+                menu.showAtMouseEvent(e);
+            });
 
             createBtn("⚡ Macros", "Insert useful text snippets", (e?: MouseEvent) => {
                 if (!e) return;
                 const menu = new Menu();
                 menu.addItem((item) => item.setTitle("🕒 Insert Current Time").setIcon("clock").onClick(() => {
-                    const time = window.moment().format("HH:mm");
-                    appendSmart(`**[${time}]:** `, "Procedure");
+                    const time = window.moment().format("HH:mm"); appendSmart(`**[${time}]:** `, "Procedure");
                 }));
                 menu.addItem((item) => item.setTitle("🧪 Aqueous Workup (EtOAc)").setIcon("beaker").onClick(() => {
                     appendSmart(`The reaction mixture was quenched with saturated aqueous NaHCO3 and extracted with EtOAc (3x). The combined organic layers were washed with brine, dried over anhydrous Na2SO4, filtered, and concentrated in vacuo.`, "Procedure");
@@ -557,7 +540,7 @@ export class SharedElnRenderer {
                 takeStandardPhoto(async (buffer, ext) => {
                     const filename = `${filePrefix}Photo_${window.moment().format("HHmmss")}.${ext}`;
                     const link = await saveMediaFile(this.plugin.app, buffer, this.plugin.settings.mediaSavePath, filename);
-                    appendSmart(`![[${link}]]`, "Photo"); new Notice(`Added ${filename}`);
+                    appendSmart(`\n![[${link}]]\n`, "Photo"); new Notice(`Added ${filename}`);
                 });
             });
 
@@ -565,10 +548,10 @@ export class SharedElnRenderer {
                 new TlcModal(this.plugin.app, async (pngData, rfData) => {
                     const filename = `${filePrefix}TLC_${window.moment().format("HHmmss")}.png`;
                     const link = await saveMediaFile(this.plugin.app, pngData, this.plugin.settings.mediaSavePath, filename);
-                    let md = `![[${link}]]\n\n| Spot | $R_f$ |\n|---|---|\n`;
+                    let md = `\n![[${link}]]\n\n| Spot | $R_f$ |\n|---|---|\n`;
                     rfData.forEach((s, i) => md += `| ${i+1} | **${s.rf.toFixed(2)}** |\n`);
                     appendSmart(md, "Analytical Data"); new Notice(`Added ${filename}`);
-                });
+                }).open();
             });
 
             createBtn("📋 Copy", "Copy Stoichiometry Table to Clipboard", () => {
@@ -584,7 +567,8 @@ export class SharedElnRenderer {
 
             createBtn("📝 Edit", "Edit Metadata & Conditions", () => {
                 if (!view) return;
-                const info = ctx.getSectionInfo(el.parentElement || el);
+                let info = ctx.getSectionInfo(el);
+                if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
                 if (info) {
                     new ElnMetaEditorModal(this.plugin.app, this.plugin, data, async (updatedYamlObj, shouldRename) => {
                         const newYaml = stringifyYaml(updatedYamlObj);
@@ -618,16 +602,22 @@ export class SharedElnRenderer {
                 ? `<span style="font-size: 11px; padding: 2px 8px; border-radius: 12px; background: var(--background-primary); border: 1px solid ${statusColor}; color: ${statusColor}; vertical-align: middle; margin-left: 10px; font-weight: 500;">${data.status}</span>` 
                 : '';
 
+            const projectBadge = data.project 
+                ? `<span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--background-secondary-alt); color: var(--text-muted); border: 1px solid var(--background-modifier-border); vertical-align: middle; margin-left: 10px; text-transform: uppercase;">📁 ${data.project}</span>`
+                : '';
+
             let html = `<div style="font-size: 14px; color: ${textColor}; margin-top:5px;">`;
             html += `<div style="border-bottom: 2px solid var(--background-modifier-border); padding-bottom: 10px; margin-bottom: 20px;">
-                        <h2 style="margin: 0; font-size: 20px; font-weight: 700; display: flex; align-items: center;">${expCode} ${statusBadge}</h2>
+                        <h2 style="margin: 0; font-size: 20px; font-weight: 700; display: flex; align-items: center;">${expCode} ${statusBadge} ${projectBadge}</h2>
                      </div>`;
+
+            const uniqueId = Math.random().toString(36).substring(2, 9); // Prevent DOM collisions
 
             html += `<div style="display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; padding: 15px; margin-bottom: 20px; background: var(--background-secondary); border-radius: 8px; border: 1px solid var(--background-modifier-border);">`;
             data.reactants.forEach((r: any, i: number) => {
                 if(i > 0) html += `<div style="font-size: 20px; font-weight: bold; color: var(--text-muted);">+</div>`;
                 html += `<div style="display: flex; flex-direction: column; align-items: center;">
-                    <div class="eln-structure scheme-size" data-type="reactants" data-index="${i}" data-smiles="${r.smiles || ''}" style="width:110px; height:110px; cursor:pointer;" title="Double-click to edit"></div>
+                    <div id="eln_${uniqueId}_r_scheme_${i}"></div>
                     <div style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">${r.eq || 1} eq</div>
                 </div>`;
             });
@@ -640,7 +630,7 @@ export class SharedElnRenderer {
             data.products.forEach((p: any, i: number) => {
                 if(i > 0) html += `<div style="font-size: 20px; font-weight: bold; color: var(--text-muted);">+</div>`;
                 html += `<div style="display: flex; flex-direction: column; align-items: center;">
-                    <div class="eln-structure scheme-size" data-type="products" data-index="${i}" data-smiles="${p.smiles || ''}" style="width:110px; height:110px; cursor:pointer;" title="Double-click to edit"></div>
+                    <div id="eln_${uniqueId}_p_scheme_${i}"></div>
                     <div style="color: var(--text-muted); font-size: 11px; margin-top: 4px;">${p.eq || 1} eq</div>
                 </div>`;
             });
@@ -663,7 +653,6 @@ export class SharedElnRenderer {
             const makeEditableTd = (type: string, i: number, key: string, val: any, inputType: 'number' | 'text' = 'number', customHtml?: string, extraStyles: string = "") => {
                 let innerHTML = customHtml !== undefined ? customHtml : '-';
                 let colorStyle = ""; 
-                
                 let rawValAttr = val !== undefined && val !== null ? String(val).replace(/"/g, '&quot;') : "";
 
                 if (customHtml === undefined) {
@@ -671,16 +660,11 @@ export class SharedElnRenderer {
                         innerHTML = val ? val : '-';
                     } else {
                         const numVal = Number(val);
-                        if (!isNaN(numVal) && numVal > 0) {
-                            innerHTML = numVal.toFixed(2);
-                        } else {
-                            innerHTML = '-';
-                            if (key === 'mw') colorStyle = "color: var(--text-error); font-weight: bold;";
-                        }
+                        if (!isNaN(numVal) && numVal > 0) { innerHTML = numVal.toFixed(2); } 
+                        else { innerHTML = '-'; if (key === 'mw') colorStyle = "color: var(--text-error); font-weight: bold;"; }
                     }
                 }
-                
-                return `<td class="eln-editable" data-type="${type}" data-idx="${i}" data-key="${key}" data-input-type="${inputType}" data-raw-value="${rawValAttr}" title="Double-click to edit" style="padding: 10px; cursor: text; transition: background 0.2s; ${colorStyle} ${extraStyles}">${innerHTML}</td>`;
+                return `<td class="eln-editable" data-type="${type}" data-idx="${i}" data-key="${key}" data-input-type="${inputType}" data-raw-value="${rawValAttr}" title="Double-click to edit text" style="padding: 10px; cursor: text; transition: background 0.2s; ${colorStyle} ${extraStyles}">${innerHTML}</td>`;
             };
 
             html += `<h4 style="margin-bottom: 10px; margin-top: 0;">Reactants</h4>
@@ -703,7 +687,7 @@ export class SharedElnRenderer {
                 html += `<tr style="border-bottom: 1px solid ${bdColor};">
                     <td style="padding: 10px;">${lrIcon}</td>
                     ${makeEditableTd('reactants', i, 'eq', r.eq, 'number', undefined, "font-weight:500;")}
-                    <td style="padding: 10px;"><div class="eln-structure table-size" data-type="reactants" data-index="${i}" data-smiles="${r.smiles || ''}" style="width:90px; height:90px; cursor:pointer;" title="Double-click to edit"></div></td>
+                    <td style="padding: 10px;"><div id="eln_${uniqueId}_r_table_${i}"></div></td>
                     ${makeEditableTd('reactants', i, 'name', r.name, 'text', r.name ? `<b>${r.name}</b> ${ghsStr}` : `- ${ghsStr}`)}
                     ${makeEditableTd('reactants', i, 'mw', r.mw, 'number', undefined, "color:var(--text-muted);")}
                     ${makeEditableTd('reactants', i, 'mmol', r.mmol, 'number')}
@@ -734,7 +718,7 @@ export class SharedElnRenderer {
 
                 html += `<tr style="border-bottom: 1px solid ${bdColor};">
                     ${makeEditableTd('products', i, 'eq', p.eq, 'number', undefined, "font-weight:500;")}
-                    <td style="padding: 10px;"><div class="eln-structure table-size" data-type="products" data-index="${i}" data-smiles="${p.smiles || ''}" style="width:90px; height:90px; cursor:pointer;" title="Double-click to edit"></div></td>
+                    <td style="padding: 10px;"><div id="eln_${uniqueId}_p_table_${i}"></div></td>
                     ${makeEditableTd('products', i, 'name', p.name, 'text', p.name ? `<b>${p.name}</b> ${ghsStr}` : `- ${ghsStr}`)}
                     ${makeEditableTd('products', i, 'mw', p.mw, 'number', undefined, "color:var(--text-muted);")}
                     ${makeEditableTd('products', i, 'mmol_isolated', p.mmol_isolated, 'number', prodMmolDisplay)}
@@ -752,6 +736,124 @@ export class SharedElnRenderer {
             const contentDiv = document.createElement("div");
             contentDiv.innerHTML = html;
             wrapper.appendChild(contentDiv);
+
+            // --- ATTACH KETCHER/API STRUCTURES ---
+            const attachStructure = (parent: HTMLElement, smiles: string, type: 'reactants'|'products', index: number, w: number, h: number) => {
+                parent.style.width = `${w}px`; parent.style.height = `${h}px`; parent.style.cursor = "pointer"; parent.title = "Double-click to edit structure"; parent.innerHTML = "⏳";
+                
+                requestAnimationFrame(async () => {
+                    const renderEl = await this.plugin.api.renderStructure(smiles, w, h);
+                    parent.empty();
+                    if (renderEl) { renderEl.style.maxWidth = '100%'; renderEl.style.maxHeight = '100%'; parent.appendChild(renderEl); } 
+                    else { parent.innerHTML = "❌"; }
+                });
+
+                parent.addEventListener("contextmenu", (e) => {
+                    if (smiles) {
+                        try {
+                            const { showChemicalContextMenu } = require('./SharedContextMenu');
+                            if (showChemicalContextMenu) showChemicalContextMenu(this.plugin, e, smiles);
+                        } catch(err) {}
+                    }
+                });
+
+                parent.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+                    let info = ctx.getSectionInfo(el);
+                    if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
+                    if (!view || !info) return;
+
+                    // FINALLY, CALL THE NEW SAFE API TO FIX THE CRASH!
+                    this.plugin.api.ketcher.openEditor(smiles || "", "smiles", (newData: string, isFile: boolean, newFormat: string) => {
+                        if (newFormat === "ket") { new Notice("ELN tables only support SMILES."); return; }
+                        const { parseYaml, stringifyYaml } = require('obsidian');
+                        const blockText = view.editor.getRange({line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
+                        try {
+                            const yamlObj = parseYaml(blockText);
+                            yamlObj[type][index].smiles = newData;
+                            delete yamlObj[type][index].mw; delete yamlObj[type][index].formula;
+                            const newYaml = stringifyYaml(yamlObj);
+                            view.editor.replaceRange(newYaml, {line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
+                        } catch (err) { new Notice("Error updating ELN YAML."); }
+                    });
+                });
+            };
+
+            data.reactants.forEach((r: any, i: number) => {
+                const schemeEl = contentDiv.querySelector(`#eln_${uniqueId}_r_scheme_${i}`);
+                if (schemeEl) attachStructure(schemeEl as HTMLElement, r.smiles, 'reactants', i, 110, 110);
+                const tableEl = contentDiv.querySelector(`#eln_${uniqueId}_r_table_${i}`);
+                if (tableEl) attachStructure(tableEl as HTMLElement, r.smiles, 'reactants', i, 90, 90);
+            });
+            
+            data.products.forEach((p: any, i: number) => {
+                const schemeEl = contentDiv.querySelector(`#eln_${uniqueId}_p_scheme_${i}`);
+                if (schemeEl) attachStructure(schemeEl as HTMLElement, p.smiles, 'products', i, 110, 110);
+                const tableEl = contentDiv.querySelector(`#eln_${uniqueId}_p_table_${i}`);
+                if (tableEl) attachStructure(tableEl as HTMLElement, p.smiles, 'products', i, 90, 90);
+            });
+			
+			// --- OPTIMIZATION MATRIX ---
+            if (currentFile && currentFile.parent && data.reactants.length > 0 && data.products.length > 0) {
+                const folderFiles = currentFile.parent.children.filter((f: any) => f instanceof TFile && f.extension.toLowerCase() === 'md' && f.path !== currentFile.path);
+                const matchRows: any[] = [];
+                
+                const currReactantSmi = data.reactants[0].smiles?.trim() || "A";
+                const currProductSmi = data.products[0].smiles?.trim() || "B";
+
+                for (const f of folderFiles) {
+                    const content = await this.plugin.app.vault.cachedRead(f as TFile);
+                    const bMatch = content.match(/```eln\s*\n([\s\S]*?)\n```/);
+                    if (bMatch) {
+                        try {
+                            const otherData = parseYaml(bMatch[1]);
+                            const otherRSmi = otherData.reactants?.[0]?.smiles?.trim();
+                            const otherPSmi = otherData.products?.[0]?.smiles?.trim();
+                            
+                            // Check if the chemistry matches
+                            if (otherRSmi === currReactantSmi && otherPSmi === currProductSmi) {
+                                matchRows.push({
+                                    file: f,
+                                    code: otherData.code || f.basename,
+                                    yield: parseFloat(otherData.products[0].yield) || 0,
+                                    yieldStr: otherData.products[0].yield ? `${otherData.products[0].yield}%` : 'N/A',
+                                    scale: otherData.reactants[0].mass ? `${otherData.reactants[0].mass} mg` : '-',
+                                    temp: otherData.temperature || '-',
+                                    solvent: otherData.solvent || '-'
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                }
+
+                if (matchRows.length > 0) {
+                    // Sort by highest yield
+                    matchRows.sort((a, b) => b.yield - a.yield);
+                    
+                    let optHtml = `<div style="margin-top: 30px; border-top: 2px dashed var(--background-modifier-border); padding-top: 15px;">
+                        <h4 style="margin: 0 0 10px 0; display:flex; align-items:center; gap:5px;"><span style="color:var(--text-accent);">🔄</span> Optimization History (Same Step)</h4>
+                        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; background: var(--background-secondary); border-radius: 6px; overflow: hidden;">
+                            <tr style="background: var(--background-secondary-alt); border-bottom: 1px solid var(--background-modifier-border);">
+                                <th style="padding: 6px 10px;">Experiment</th><th style="padding: 6px 10px;">Yield</th><th style="padding: 6px 10px;">Scale</th><th style="padding: 6px 10px;">Solvent</th><th style="padding: 6px 10px;">Temp</th>
+                            </tr>`;
+                            
+                    matchRows.forEach(row => {
+                        optHtml += `<tr style="border-bottom: 1px solid var(--background-modifier-border-hover);">
+                            <td style="padding: 6px 10px;"><a class="internal-link" href="${row.file.path}">${row.code}</a></td>
+                            <td style="padding: 6px 10px; font-weight:bold; color: ${row.yield >= 80 ? 'var(--text-success)' : 'var(--text-muted)'};">${row.yieldStr}</td>
+                            <td style="padding: 6px 10px;">${row.scale}</td>
+                            <td style="padding: 6px 10px;">${row.solvent}</td>
+                            <td style="padding: 6px 10px;">${row.temp}</td>
+                        </tr>`;
+                    });
+                    optHtml += `</table></div>`;
+                    
+                    const optDiv = document.createElement("div");
+                    optDiv.innerHTML = optHtml;
+                    wrapper.appendChild(optDiv);
+                }
+            }
 
             return wrapper;
 
@@ -928,6 +1030,7 @@ export async function createNewElnExperiment(app: App, code: string, folderPath:
     
     const defaultData = {
         code: baseCode,
+        project: "",  // <-- Added Project to Default Template
         status: "Planned",
         solvent: "",
         temperature: "rt",
@@ -1198,7 +1301,8 @@ export class ElnMetaEditorModal extends Modal {
             const currentP = this.data.products.map((p:any)=>p.smiles).join('.');
             const rxnStr = currentR && currentP ? `${currentR}>>${currentP}` : "";
             
-            this.plugin.openKetcherModal(rxnStr, "smiles", (smi: string) => {
+            // USE SAFE API CALL!
+            this.plugin.api.ketcher.openEditor(rxnStr, "smiles", (smi: string) => {
                 if (smi.includes('>')) this.processReactionSmiles(smi);
                 else new Notice("Please draw a reaction arrow to split reactants and products.");
             });
@@ -1220,6 +1324,7 @@ export class ElnMetaEditorModal extends Modal {
         };
         
         addInput(metaGrid, "Reaction Code (Renames File)", "code"); 
+        addInput(metaGrid, "Project Name", "project");
         
         const statusWrap = metaGrid.createDiv(); 
         statusWrap.createEl("div", { text: "Status", cls: "color-text-muted", attr: { style: "font-size:12px; margin-bottom:3px;"} });
@@ -1256,7 +1361,8 @@ export class ElnMetaEditorModal extends Modal {
             
             const drawBtn = actionRow.createEl("button", { text: "✏️ Draw", attr: {style: "font-size:11px; padding: 4px 8px;"} });
             drawBtn.onclick = () => {
-                this.plugin.openKetcherModal(item.smiles || "", "smiles", (newSmiles: string) => {
+                // USE SAFE API CALL!
+                this.plugin.api.ketcher.openEditor(item.smiles || "", "smiles", (newSmiles: string) => {
                     item.smiles = newSmiles;
                     this.render();
                 });
@@ -1338,22 +1444,10 @@ export class ElnMetaEditorModal extends Modal {
             
             if (type === 'reactants') { 
                 makeNumInp('eq', 'Eq'); 
-                if (this.advancedMode) {
-                    makeNumInp('mmol', 'n(mmol)', () => { delete item.mass; delete item.volume; }); 
-                }
+                if (this.advancedMode) { makeNumInp('mmol', 'n(mmol)', () => { delete item.mass; delete item.volume; }); }
                 makeNumInp('mass', 'm(mg)', () => { delete item.mmol; delete item.volume; }); 
-                
-                if (this.advancedMode) {
-                    makeNumInp('volume', 'V(mL)', () => { delete item.mmol; delete item.mass; });
-                    makeNumInp('purity', 'Purity(%)'); 
-                    makeNumInp('molarity', 'Conc(M)'); 
-                    makeNumInp('density', 'Density'); 
-                }
             } else { 
                 makeNumInp('eq', 'Eq'); 
-                if (this.advancedMode) {
-                    makeNumInp('mmol_isolated', 'Isol(mmol)', () => { delete item.mass_isolated; });
-                }
                 makeNumInp('mass_isolated', 'Isol(mg)', () => { delete item.mmol_isolated; }); 
             }
         };
