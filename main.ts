@@ -1,5 +1,5 @@
 // main.ts
-import { App, Modal, Plugin, MarkdownView, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon, Menu } from 'obsidian';
+import { App, Modal, Plugin, MarkdownView, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon, Menu, Setting } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
@@ -231,7 +231,7 @@ export default class ChemEditPlugin extends Plugin {
                                 item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
                                     const data = await this.app.vault.read(file);
                                     const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
-                                    if (smiles) window.open(`https://www.nmrium.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
+                                    if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
                                     else new Notice("Could not extract SMILES for NMR prediction.");
                                 });
                             });
@@ -792,46 +792,101 @@ class KetcherModal extends Modal {
         const saveBtn = btnContainer.createEl("button", { text: "Save", cls: "mod-cta" }); const saveFileBtn = btnContainer.createEl("button", { text: "Save as File..." }); const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
 
         const doSave = async (formatToGet: string) => {
-            if (!this.ketcherInstance || (!this.ketcherInstance.editor && !this.ketcherInstance.server)) { new Notice("Ketcher is still initializing..."); return; }
+            if (!this.ketcherInstance || (!this.ketcherInstance.editor && !this.ketcherInstance.server)) { 
+                new Notice("Ketcher is still initializing..."); 
+                return; 
+            }
             try {
-                let resultData = ""; let finalFormat = formatToGet.toLowerCase(); const isPolyglotSvg = finalFormat === 'svg' || finalFormat === 'ketcher.svg';
+                let resultData = ""; 
+                let finalFormat = formatToGet.toLowerCase(); 
+                const isPolyglotSvg = finalFormat === 'svg' || finalFormat === 'ketcher.svg';
+                
                 try {
                     if (isPolyglotSvg) {
-                        const ket = await this.ketcherInstance.getKet(); let svgText = "";
-                        try {
-                            const img = await this.ketcherInstance.generateImage(ket, { outputFormat: 'svg' });
-                            if (typeof img === 'string') { if (img.startsWith('data:image/svg+xml;base64,')) svgText = atob(img.split(',')[1]); else if (img.startsWith('data:image/svg+xml;utf8,')) svgText = decodeURIComponent(img.split(',')[1]); else svgText = img; } 
-                            else if (img instanceof Blob) { svgText = await img.text(); }
-                            resultData = embedDataInSvg(svgText, ket, 'ket'); finalFormat = 'svg'; 
-                        } catch(e) { new Notice("Failed to generate SVG"); return; }
-                    } else if (finalFormat === "smiles") { resultData = await this.ketcherInstance.getSmiles(); } 
-                    else if (finalFormat === "ket") { resultData = await this.ketcherInstance.getKet(); } 
-                    else if (finalFormat === "inchi") { resultData = await this.ketcherInstance.getInchi(); } 
-                    else if (finalFormat === "smarts") { resultData = await this.ketcherInstance.getSmarts(); } 
-                    else if (finalFormat === "fasta") { resultData = await this.ketcherInstance.getFasta(); } 
-                    else if (finalFormat === "sequence") { resultData = await this.ketcherInstance.getSequence(); } 
-                    else if (finalFormat === "idt") { resultData = await this.ketcherInstance.getIdt(); } 
-                    else if (finalFormat === "helm") { resultData = await this.ketcherInstance.getHelm(); } 
-                    else if (finalFormat === "biln") { resultData = typeof this.ketcherInstance.getBiln === "function" ? await this.ketcherInstance.getBiln() : await this.ketcherInstance.getMolfile(); } 
-                    else if (finalFormat === "cdxml") {
-                        if (typeof this.ketcherInstance.getCDXml === "function") { resultData = await this.ketcherInstance.getCDXml(); } 
-                        else if (typeof this.ketcherInstance.getCdxml === "function") { resultData = await this.ketcherInstance.getCdxml(); } 
-                        else { resultData = await this.ketcherInstance.getMolfile(); }
-                    } else if (finalFormat === "rxn") {
-                        if (typeof this.ketcherInstance.getRxn === "function") { resultData = await this.ketcherInstance.getRxn(); } 
-                        else if (typeof this.ketcherInstance.getRxnfile === "function") { resultData = await this.ketcherInstance.getRxnfile(); } 
-                        else { resultData = await this.ketcherInstance.getMolfile(); }
-                    } else { resultData = await this.ketcherInstance.getMolfile(); }
+                        const ket = await this.ketcherInstance.getKet(); 
+                        let svgText = "";
+                        const img = await this.ketcherInstance.generateImage(ket, { outputFormat: 'svg' });
+                        if (typeof img === 'string') { 
+                            if (img.startsWith('data:image/svg+xml;base64,')) svgText = atob(img.split(',')[1]); 
+                            else if (img.startsWith('data:image/svg+xml;utf8,')) svgText = decodeURIComponent(img.split(',')[1]); 
+                            else svgText = img; 
+                        } else if (img instanceof Blob) { 
+                            svgText = await img.text(); 
+                        }
+                        resultData = embedDataInSvg(svgText, ket, 'ket'); 
+                        finalFormat = 'svg'; 
+                    } else {
+                        const k = this.ketcherInstance;
+
+                        // Safe wrapper to cleanly fallback if a specific export method crashes
+                        const tryExport = async (primary: () => Promise<string>, fallback: () => Promise<string>) => {
+                            try { return await primary(); } catch (e) { return await fallback(); }
+                        };
+
+                        switch(finalFormat) {
+                            case 'smiles': resultData = await k.getSmiles(); break;
+                            case 'ket': resultData = await k.getKet(); break;
+                            case 'inchi': resultData = await k.getInchi(); break;
+                            case 'smarts': resultData = await k.getSmarts(); break;
+                            case 'fasta': resultData = await tryExport(() => k.getFasta(), () => k.getMolfile()); break;
+                            case 'sequence': resultData = await tryExport(() => k.getSequence(), () => k.getMolfile()); break;
+                            case 'idt': resultData = await tryExport(() => k.getIdt(), () => k.getMolfile()); break;
+                            case 'helm': resultData = await tryExport(() => k.getHelm(), () => k.getMolfile()); break;
+                            case 'biln': resultData = await tryExport(() => (typeof k.getBiln === 'function' ? k.getBiln() : k.getMolfile()), () => k.getMolfile()); break;
+                            case 'cdxml': resultData = await tryExport(() => (typeof k.getCDXml === 'function' ? k.getCDXml() : k.getCdxml()), () => k.getMolfile()); break;
+                            case 'rxn': resultData = await tryExport(() => (typeof k.getRxn === 'function' ? k.getRxn() : k.getRxnfile()), () => k.getMolfile()); break;
+                            case 'mol':
+                            case 'sdf':
+                            default: resultData = await k.getMolfile(); break;
+                        }
+                    }
                 } catch (err: any) {
                     if (err.message && err.message.toLowerCase().includes('reaction')) {
-                        resultData = await this.ketcherInstance.getKet(); finalFormat = "ket"; new Notice("Reactions cannot be saved in this format. Automatically upgraded to .KET format.");
-                        if (this.isSavingAsFile) { this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-z]+$/i, '.ket'); }
-                    } else { throw err; }
+                        resultData = await this.ketcherInstance.getKet(); 
+                        finalFormat = "ket"; 
+                        new Notice("Reactions cannot be saved in this format. Automatically upgraded to .KET format.");
+                        if (this.isSavingAsFile) { 
+                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-zA-Z0-9]+$/i, '.ket'); 
+                        }
+                    } else { 
+                        console.warn("Primary save failed, forcing fallback to .ket", err);
+                        resultData = await this.ketcherInstance.getKet();
+                        finalFormat = "ket";
+                        new Notice(`Export to requested format failed. Saved as .ket instead to prevent data loss.`);
+                        if (this.isSavingAsFile) { 
+                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-zA-Z0-9]+$/i, '.ket'); 
+                        }
+                    }
                 }
-                if (this.isSavingAsFile) { const fileName = this.isSavingAsFile; await this.plugin.app.vault.create(fileName, resultData); this.onSave(`[[${fileName}]]`, true, finalFormat); } 
-                else { this.onSave(resultData, false, finalFormat); }
+
+                if (!resultData) {
+                    new Notice("Failed to generate structure data. Format may not be supported by this structure.");
+                    return;
+                }
+
+                if (this.isSavingAsFile) { 
+                    let fileName = this.isSavingAsFile; 
+                    let counter = 1;
+                    let finalFileName = fileName;
+                    const pathParts = fileName.split('/');
+                    const baseFile = pathParts.pop() || fileName;
+                    const dir = pathParts.length > 0 ? pathParts.join('/') + '/' : '';
+                    
+                    while (this.plugin.app.vault.getAbstractFileByPath(finalFileName)) {
+                        finalFileName = dir + baseFile.replace(/\.([a-zA-Z0-9]+)$/, `-${counter}.$1`);
+                        counter++;
+                    }
+
+                    await this.plugin.app.vault.create(finalFileName, resultData); 
+                    this.onSave(`[[${finalFileName}]]`, true, finalFormat); 
+                } else { 
+                    this.onSave(resultData, false, finalFormat); 
+                }
                 this.close();
-            } catch (e: any) { new Notice("Error saving from Ketcher: " + (e.message || e)); }
+            } catch (e: any) { 
+                console.error(e);
+                new Notice("Error saving from Ketcher: " + (e.message || e)); 
+            }
         };
 
         saveBtn.onclick = () => doSave(this.format);
