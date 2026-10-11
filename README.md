@@ -17,7 +17,25 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 📝 Release Notes
 
-### 🚀 What's New in ChemEdit 1.3.5-1.3.7
+### 🚀 What's New in ChemEdit 
+
+**⚡ (1.4.0)**
+
+- **New LIMS Dashboards:** Full-screen, interconnected hubs for Orders, Equipment, Protocols, and Compound Data.
+- **Script Store & Engine:** Download or write custom JS macros (i.e. for additional offline calculators) and bind them to hotkeys.
+- **Settings UI:** Settings are now neatly grouped in collapsible accordions with granular toggles to hide unused dashboards.
+- **Web Sharing:** Instantly generate shareable web links for molecules and ELN reactions to send to collaborators.
+
+
+**⚡ (1.3.9)**
+
+- **Glyph Bug Fixed:** Resolved `.cdxml` atom mutation issues in notes with multiple embeds (thanks @poeticmedic!).
+- **Modular Core:** Keep it lightweight—disable unused features (ELN, Pathways, Context Menus) via Advanced Settings.
+- **Chem Navigator:** New side-panel to browse ELN Projects, Library, Inventory, and Vault Search.
+
+
+
+**⚡ (1.3.5-1.3.7)**
 
 - Fixed MW (changed engine) auto-calculation bugs for complex stereobonds conjugated to aromatic rings (e.g., `/` or `\` next to ring closures `C=1`) (thanks @Snipinium!).
 - Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g., geometric isomers). (thanks @ignorgchem!).
