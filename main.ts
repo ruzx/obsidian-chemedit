@@ -1,60 +1,61 @@
 // main.ts
-import { App, Modal, Plugin, MarkdownView, Editor, Notice, requestUrl, TextFileView, WorkspaceLeaf, TFile, addIcon, Menu, Setting } from 'obsidian';
+import { Plugin, MarkdownView, Editor, Notice, TFile, addIcon } from 'obsidian';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import SmiDrawer from 'smiles-drawer';
 import KetcherReact from './KetcherReact';
-import { RangeSetBuilder } from "@codemirror/state";
-import { EditorView, ViewPlugin, ViewUpdate, WidgetType, Decoration, DecorationSet } from "@codemirror/view";
 
 // Modular Imports 
 import { ChemEditSettings, DEFAULT_SETTINGS, ChemEditSettingTab } from './Settings';
 import { ChemEditAPI, buildChemEditAPI } from './ChemEditAPI';
 import { CHEM_NAVIGATOR_VIEW_TYPE, ChemNavigatorView } from './ChemNavigator';
 import { SynthesisMapRenderer } from './SharedPathway';
-import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer, getCompoundLibrary, CompoundSuggestModal, AddToLibraryModal, addCompoundToLibrary, calculateMwOffline } from './SharedEln';
+import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer, getCompoundLibrary, CompoundSuggestModal } from './SharedEln';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
 import { SharedGalleryRenderer } from './SharedGallery';
 import { ChemDatabaseRenderer, addCompoundToLibrary as addCompoundToDatabase } from './SharedBase';
 import { ChemDataEngine } from './ChemDataEngine';
 import { showChemicalContextMenu, populateChemicalMenu } from './SharedContextMenu';
 
+// Extractions & Engines
+import { extractDataFromSvg } from './ChemUtils';
+import { KetcherModal } from './KetcherModals';
+import { CHEM_FILE_VIEW_TYPE, ChemFileView } from './ChemFileView';
+import { buildLivePreviewPlugin } from './LivePreview';
+import { ChemScriptEngine } from './ScriptEngine';
+
+// Dashboards
+import { ELN_DASHBOARD_VIEW_TYPE, ElnDashboardView } from './ElnDashboard';
+import { INVENTORY_DASHBOARD_VIEW_TYPE, InventoryDashboardView } from './InventoryDashboard';
+import { EQUIPMENT_DASHBOARD_VIEW_TYPE, EquipmentDashboardView } from './EquipmentDashboard';
+import { PROTOCOLS_DASHBOARD_VIEW_TYPE, ProtocolsDashboardView } from './ProtocolsDashboard';
+import { LIBRARY_DASHBOARD_VIEW_TYPE, LibraryDashboardView } from './LibraryDashboard';
+import { GALLERY_DASHBOARD_VIEW_TYPE, GalleryDashboardView } from './GalleryDashboard';
+import { CHARACTERIZATION_DASHBOARD_VIEW_TYPE, CharacterizationDashboardView } from './CharacterizationDashboard';
+import { ORDERS_DASHBOARD_VIEW_TYPE, OrdersDashboardView } from './OrdersDashboard';
+
 let createRoot: any = null;
 try { const ReactDomClient = require('react-dom/client'); if (ReactDomClient && ReactDomClient.createRoot) createRoot = ReactDomClient.createRoot; } catch (e) { createRoot = null; }
-
-export function embedDataInSvg(svgStr: string, data: string, format: string): string {
-    try {
-        const base64Data = btoa(unescape(encodeURIComponent(data)));
-        const injection = `\n<desc id="ketcher-data" data-format="${format}">${base64Data}</desc>\n`;
-        if (svgStr.includes('id="ketcher-data"')) return svgStr.replace(/<desc id="ketcher-data"[^>]*>.*?<\/desc>/is, injection);
-        return svgStr.replace(/(<svg[^>]*>)/i, `$1${injection}`);
-    } catch (e) { return svgStr; }
-}
-
-export function extractDataFromSvg(svgStr: string): { format: string, data: string } | null {
-    const match = svgStr.match(/<desc id="ketcher-data" data-format="([^"]+)">([\s\S]*?)<\/desc>/i);
-    if (match) { try { return { format: match[1], data: decodeURIComponent(escape(atob(match[2].trim()))) }; } catch (e) { return null; } }
-    return null;
-}
 
 export default class ChemEditPlugin extends Plugin {
     settings: ChemEditSettings;
     public api: ChemEditAPI; 
+    public scriptEngine: ChemScriptEngine | null = null;
     
     hiddenKetcherContainer: HTMLDivElement;
     headlessKetcher: any = null;
     headlessRoot: any = null; 
     isProcessingHeadless = false;
-    headlessQueue: { data: string, isInline: boolean, resolve: (el: HTMLElement | null) => void }[] = [];
+    headlessQueue: { data: string, isInline: boolean, resolve: (el: HTMLElement | null) => void, w?: number, h?: number }[] = [];
 
     cameraRibbonEl: HTMLElement | null = null;
     tlcRibbonEl: HTMLElement | null = null;
     elnRibbonEl: HTMLElement | null = null;
+    dashboardRibbonEl: HTMLElement | null = null;
     navigatorRibbonEl: HTMLElement | null = null;
 
     getSupportedExts(): string[] { return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0); }
 
-    // --- API BRIDGE FOR KETCHER ---
     public openKetcherModal(initialData: string, format: string, onSave: (data: string, isFile: boolean, newFormat?: string) => void) {
         new KetcherModal(this, initialData, format, (newData: string, isFile: boolean, newFormat?: string) => {
             onSave(newData, isFile, newFormat);
@@ -67,13 +68,8 @@ export default class ChemEditPlugin extends Plugin {
         
         if (format === 'svg') {
             const ex = extractDataFromSvg(data);
-            if (ex) {
-                openData = ex.data;
-                openFormat = 'svg'; // We still want KetcherModal to treat it as SVG output
-            } else {
-                new Notice("Not a Ketcher SVG");
-                return;
-            }
+            if (ex) { openData = ex.data; openFormat = 'svg'; } 
+            else { new Notice("Not a Ketcher SVG"); return; }
         }
         new KetcherModal(this, openData, openFormat, async (newData: string, isFile: boolean, newFormat?: string) => {
             if (isFile) { new Notice(`Saved as new file: ${newData}. Please update the link.`); return; }
@@ -95,7 +91,6 @@ export default class ChemEditPlugin extends Plugin {
         }).open();
     }
 
-    // FIXED SVG NAMESPACING: Prevents double-prefixing of xlink:href
     namespaceSvgIds(svgText: string): string {
         const uniquePrefix = `k-${Math.random().toString(36).substring(2, 9)}-`;
         return svgText
@@ -107,7 +102,6 @@ export default class ChemEditPlugin extends Plugin {
     }
 
     refreshRibbonIcons() {
-        // Fume Hood Icons
         if (this.settings.showMediaRibbonIcons) {
             if (!this.cameraRibbonEl) {
                 this.cameraRibbonEl = this.addRibbonIcon('camera', 'Take Lab Photo', () => {
@@ -137,7 +131,6 @@ export default class ChemEditPlugin extends Plugin {
             if (this.tlcRibbonEl) this.tlcRibbonEl.style.display = 'none';
         }
 
-        // ELN Ribbon Icon
         if (this.settings.showElnRibbonIcon && this.settings.enableEln) {
             if (!this.elnRibbonEl) {
                 this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
@@ -152,7 +145,14 @@ export default class ChemEditPlugin extends Plugin {
             if (this.elnRibbonEl) this.elnRibbonEl.style.display = 'none';
         }
 
-        // Navigator Ribbon Icon
+        if (this.settings.showDashboardRibbonIcon && this.settings.enableEln) {
+            if (!this.dashboardRibbonEl) {
+                this.dashboardRibbonEl = this.addRibbonIcon('chem-dashboard', 'Open LIMS Dashboard', () => { this.activateElnDashboard(); });
+            } else { this.dashboardRibbonEl.style.display = ''; }
+        } else {
+            if (this.dashboardRibbonEl) this.dashboardRibbonEl.style.display = 'none';
+        }
+
         if (this.settings.enableNavigator && this.settings.showNavigatorRibbonIcon) {
             if (!this.navigatorRibbonEl) {
                 this.navigatorRibbonEl = this.addRibbonIcon('chem-navigator', 'Open Chem Navigator', () => { this.activateNavigator(); });
@@ -163,95 +163,176 @@ export default class ChemEditPlugin extends Plugin {
     }
 
     async onload() {
-        // Hexagon with internal structure
         addIcon('flask-round', `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="5" d="M 42 35 L 42 55 A 18 18 0 1 0 58 55 L 58 35 Z" stroke-linejoin="round"/><line x1="36" y1="35" x2="64" y2="35" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><line x1="32" y1="65" x2="68" y2="65" stroke="currentColor" stroke-width="4" stroke-dasharray="4 4"/>`);
-        
-        // Chemical Compass in a Hexagon
         const compassIcon = `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><polygon points="50,18 64,50 50,82 36,50" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><polygon points="50,18 64,50 50,50" fill="currentColor"/><polygon points="50,82 36,50 50,50" fill="currentColor"/>`;
         addIcon('chem-navigator', compassIcon);
-        addIcon('flask-conical', compassIcon); // Overwrite so the ChemNavigator view gets the properly scaled icon too
+        addIcon('flask-conical', compassIcon);
+        const dashboardIcon = `<path fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" d="M 20 85 A 10 10 0 0 1 30 75 L 85 75" /><path fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" d="M 30 15 L 85 15 L 85 85 L 30 85 A 10 10 0 0 1 20 75 L 20 25 A 10 10 0 0 1 30 15 Z" /><polygon fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" points="57,32 72,40 72,58 57,66 42,58 42,40" />`;
+        addIcon('chem-dashboard', dashboardIcon);
         
         await this.loadSettings();
         this.api = buildChemEditAPI(this);
         this.addSettingTab(new ChemEditSettingTab(this.app, this));
 
-        // 1. Headless Setup
         this.hiddenKetcherContainer = document.createElement('div');
         this.hiddenKetcherContainer.className = 'chemedit-headless-ketcher';
         Object.assign(this.hiddenKetcherContainer.style, { position: 'absolute', top: '-10000px', left: '-10000px', width: '800px', height: '600px', opacity: '0', pointerEvents: 'none', zIndex: '-1' });
         document.body.appendChild(this.hiddenKetcherContainer);
-        this.app.workspace.onLayoutReady(() => { this.bootHeadlessKetcher(); });
-
-        // 2. View Registrations
-        const extsForView = this.getSupportedExts().filter(ext => ext !== 'svg');
-        this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
-        this.registerExtensions(extsForView, "chem-file-view");
         
-        this.registerEditorExtension(this.buildLivePreviewPlugin());
+        this.app.workspace.onLayoutReady(() => { 
+            this.bootHeadlessKetcher(); 
+            if (this.settings.enableScripting) {
+                this.scriptEngine = new ChemScriptEngine(this);
+                this.scriptEngine.loadScripts();
+            }
+        });
+
+        const extsForView = this.getSupportedExts().filter(ext => ext !== 'svg');
+        this.registerView(CHEM_FILE_VIEW_TYPE, (leaf) => new ChemFileView(leaf, this));
+        this.registerExtensions(extsForView, CHEM_FILE_VIEW_TYPE);
+        
+        this.registerEditorExtension(buildLivePreviewPlugin(this));
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => { this.openNewDrawingModal(); });
 
-        // MODULE: Chem Navigator
+        this.refreshRibbonIcons();
+
+        // --- OPTIONAL MODULES ---
+
         if (this.settings.enableNavigator) {
             this.registerView(CHEM_NAVIGATOR_VIEW_TYPE, (leaf) => new ChemNavigatorView(leaf, this));
             this.addCommand({ id: 'open-chem-navigator', name: 'Open Chem Navigator', callback: () => { this.activateNavigator(); } });
         }
 
-        this.refreshRibbonIcons();
-
-        // MODULE: Context Menus
         if (this.settings.enableContextMenu) {
-            this.registerEvent(
-                this.app.workspace.on('file-menu', (menu, file) => {
-                    if (file instanceof TFile) {
-                        const ext = file.extension.toLowerCase();
-                        if (ext === 'svg') {
-                            menu.addItem((item) => {
-                                item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const extracted = extractDataFromSvg(data);
-                                    if (extracted) {
-                                        new KetcherModal(this, data, "svg", async (newData) => {
-                                            await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
-                                        }).open();
-                                    } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
-                                });
+            this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
+                if (file instanceof TFile) {
+                    const ext = file.extension.toLowerCase();
+                    if (ext === 'svg') {
+                        menu.addItem((item) => {
+                            item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const extracted = extractDataFromSvg(data);
+                                if (extracted) {
+                                    new KetcherModal(this, data, "svg", async (newData) => {
+                                        await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
+                                    }).open();
+                                } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
                             });
-                        }
-                        const activeExts = this.getSupportedExts();
-                        if (activeExts.includes(ext) && ext !== 'svg') {
-                            menu.addSeparator();
-                            menu.addItem((item) => {
-                                item.setTitle("➕ Add to Compound Database").setIcon("flask-round").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const targetFolder = this.settings.elnDirectory || "Library";
-                                    addCompoundToDatabase(this.app, this, targetFolder, () => {}, data);
-                                });
-                            });
-                            menu.addItem((item) => {
-                                item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
-                                    if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
-                                    else new Notice("Could not extract SMILES for NMR prediction.");
-                                });
-                            });
-                        }
+                        });
                     }
-                })
-            );
-
-            this.registerEvent(
-                this.app.workspace.on('editor-menu', (menu, editor, view) => {
-                    const selection = editor.getSelection().trim();
-                    if (selection && selection.length < 500 && !selection.includes('\n')) {
+                    const activeExts = this.getSupportedExts();
+                    if (activeExts.includes(ext) && ext !== 'svg') {
                         menu.addSeparator();
-                        populateChemicalMenu(menu, this, selection);
+                        menu.addItem((item) => {
+                            item.setTitle("➕ Add to Compound Database").setIcon("flask-round").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const targetFolder = this.settings.elnDirectory || "Library";
+                                addCompoundToDatabase(this.app, this, targetFolder, () => {}, data);
+                            });
+                        });
+                        menu.addItem((item) => {
+                            item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
+                                if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
+                                else new Notice("Could not extract SMILES for NMR prediction.");
+                            });
+                        });
                     }
-                })
-            );
+                }
+            }));
+
+            this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
+                const selection = editor.getSelection().trim();
+                if (selection && selection.length < 500 && !selection.includes('\n')) {
+                    menu.addSeparator();
+                    populateChemicalMenu(menu, this, selection);
+                }
+            }));
         }
 
-        // CORE COMMANDS
+        if (this.settings.enableScripting) {
+            this.addCommand({
+                id: 'reload-chemedit-scripts',
+                name: 'Reload Custom Scripts',
+                callback: () => {
+                    if (this.scriptEngine) {
+                        this.scriptEngine.loadScripts();
+                        new Notice("ChemEdit scripts reloaded!");
+                    }
+                }
+            });
+            this.addCommand({
+                id: 'open-chemedit-script-store',
+                name: 'Open Script Store',
+                callback: () => {
+                    const { ScriptStoreModal } = require('./ScriptStore');
+                    new ScriptStoreModal(this.app, this).open();
+                }
+            });
+        }
+
+        if (this.settings.enableEln) {
+            this.addCommand({ id: 'insert-compound-library', name: 'Insert Compound Library Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: library\npath: Library/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-inventory-database', name: 'Insert Chemical Inventory Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: inventory\npath: Inventory/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-eln-gallery', name: 'Insert ELN Experiment Gallery', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`eln-gallery\npath: Experiments/\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-equipment-database', name: 'Insert Lab Equipment / Instrument Tracker', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: equipment\npath: Equipment/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({
+                id: 'insert-from-library', name: 'Insert SMILES from Library',
+                editorCallback: async (editor: Editor) => {
+                    const lib = await getCompoundLibrary(this);
+                    new CompoundSuggestModal(this.app, lib, (selected) => { editor.replaceSelection(selected.smiles); }).open();
+                }
+            });
+
+            this.registerMarkdownCodeBlockProcessor("chem-db", async (source, el, ctx) => { const r = new ChemDatabaseRenderer(this); await r.renderDatabase(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => { const r = new SharedGalleryRenderer(this); await r.renderChemGallery(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => { const r = new ElnGalleryRenderer(this); await r.renderGalleryBlock(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => { const elnRenderer = new SharedElnRenderer(this); await elnRenderer.renderElnBlock(source, el, ctx); });
+
+            // Dashboards Registration (Conditional)
+            if (this.settings.enableElnDashboard) {
+                this.registerView(ELN_DASHBOARD_VIEW_TYPE, (leaf) => new ElnDashboardView(leaf, this));
+                this.addCommand({ id: 'open-eln-dashboard', name: 'Open ELN Dashboard', callback: () => this.activateElnDashboard() });
+            }
+            if (this.settings.enableInventoryDashboard) {
+                this.registerView(INVENTORY_DASHBOARD_VIEW_TYPE, (leaf) => new InventoryDashboardView(leaf, this));
+                this.addCommand({ id: 'open-inventory-dashboard', name: 'Open Chemical Inventory Dashboard', callback: () => this.activateInventoryDashboard() });
+            }
+            if (this.settings.enableEquipmentDashboard) {
+                this.registerView(EQUIPMENT_DASHBOARD_VIEW_TYPE, (leaf) => new EquipmentDashboardView(leaf, this));
+                this.addCommand({ id: 'open-equipment-dashboard', name: 'Open Lab Equipment Dashboard', callback: () => this.activateEquipmentDashboard() });
+            }
+            if (this.settings.enableProtocolsDashboard) {
+                this.registerView(PROTOCOLS_DASHBOARD_VIEW_TYPE, (leaf) => new ProtocolsDashboardView(leaf, this));
+                this.addCommand({ id: 'open-protocols-dashboard', name: 'Open Lab Protocols Dashboard', callback: () => this.activateProtocolsDashboard() });
+            }
+            if (this.settings.enableLibraryDashboard) {
+                this.registerView(LIBRARY_DASHBOARD_VIEW_TYPE, (leaf) => new LibraryDashboardView(leaf, this));
+                this.addCommand({ id: 'open-library-dashboard', name: 'Open Compounds Library Dashboard', callback: () => this.activateLibraryDashboard() });
+            }
+            if (this.settings.enableGalleryDashboard) {
+                this.registerView(GALLERY_DASHBOARD_VIEW_TYPE, (leaf) => new GalleryDashboardView(leaf, this));
+                this.addCommand({ id: 'open-gallery-dashboard', name: 'Open Drawings Gallery Dashboard', callback: () => this.activateGalleryDashboard() });
+            }
+            if (this.settings.enableCharacterizationDashboard) {
+                this.registerView(CHARACTERIZATION_DASHBOARD_VIEW_TYPE, (leaf) => new CharacterizationDashboardView(leaf, this));
+                this.addCommand({ id: 'open-characterization-dashboard', name: 'Open Compound Data Organizer', callback: () => this.activateCharacterizationDashboard() });
+            }
+            if (this.settings.enableOrdersDashboard) {
+                this.registerView(ORDERS_DASHBOARD_VIEW_TYPE, (leaf) => new OrdersDashboardView(leaf, this));
+                this.addCommand({ id: 'open-orders-dashboard', name: 'Open Orders Dashboard', callback: () => this.activateOrdersDashboard() });
+            }
+        }
+
+        if (this.settings.enablePathways) {
+            this.addCommand({ id: 'insert-synthesis-map', name: 'Insert Synthesis Map (Auto-Graph)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-map\n\`\`\`\n`); }});
+            this.addCommand({ id: 'insert-synthesis-plan', name: 'Insert Synthesis Plan (Manual Flowchart)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-plan\n[[EXP-001]] -> [[EXP-002]] -> C1=CC=CC=C1\n\`\`\`\n`); }});
+            this.registerMarkdownCodeBlockProcessor("synthesis-map", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderMap(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("synthesis-plan", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderPlan(source, el, ctx); });
+        }
+
+        // --- CORE COMMANDS ---
         this.addCommand({
             id: 'insert-new-molecule', name: 'Draw new SMILES molecule',
             editorCallback: (editor: Editor) => {
@@ -299,41 +380,10 @@ export default class ChemEditPlugin extends Plugin {
             }
         });
 
-        // MODULE: ELN & DATABASES
-        if (this.settings.enableEln) {
-            this.addCommand({ id: 'insert-compound-library', name: 'Insert Compound Library Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: library\npath: Library/\nlayout: table\n\`\`\`\n`) });
-            this.addCommand({ id: 'insert-inventory-database', name: 'Insert Chemical Inventory Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: inventory\npath: Inventory/\nlayout: table\n\`\`\`\n`) });
-            this.addCommand({ id: 'insert-eln-gallery', name: 'Insert ELN Experiment Gallery', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`eln-gallery\npath: Experiments/\n\`\`\`\n`) });
-            this.addCommand({
-                id: 'insert-from-library', name: 'Insert SMILES from Library',
-                editorCallback: async (editor: Editor) => {
-                    const lib = await getCompoundLibrary(this);
-                    new CompoundSuggestModal(this.app, lib, (selected) => { editor.replaceSelection(selected.smiles); }).open();
-                }
-            });
-
-            this.registerMarkdownCodeBlockProcessor("chem-db", async (source, el, ctx) => { const r = new ChemDatabaseRenderer(this); await r.renderDatabase(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => { const r = new SharedGalleryRenderer(this); await r.renderChemGallery(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => { const r = new ElnGalleryRenderer(this); await r.renderGalleryBlock(source, el, ctx); });
-            
-            this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
-                const elnRenderer = new SharedElnRenderer(this); 
-                await elnRenderer.renderElnBlock(source, el, ctx);
-            });
-        }
-
-        // MODULE: PATHWAYS
-        if (this.settings.enablePathways) {
-            this.addCommand({ id: 'insert-synthesis-map', name: 'Insert Synthesis Map (Auto-Graph)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-map\n\`\`\`\n`); }});
-            this.addCommand({ id: 'insert-synthesis-plan', name: 'Insert Synthesis Plan (Manual Flowchart)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-plan\n[[EXP-001]] -> [[EXP-002]] -> C1=CC=CC=C1\n\`\`\`\n`); }});
-            this.registerMarkdownCodeBlockProcessor("synthesis-map", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderMap(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("synthesis-plan", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderPlan(source, el, ctx); });
-        }
-
-        // CORE: Post Processors (Always On)
+        // --- CORE PROCESSORS ---
         this.registerMarkdownPostProcessor(async (el, ctx) => {
             const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null); const nodes: Text[] = []; let node;
-            while (node = walker.nextNode()) nodes.push(node as Text);
+            while ((node = walker.nextNode())) nodes.push(node as Text);
             for (const n of nodes) {
                 const text = n.nodeValue || "";
                 if (this.settings.inlineSmilesPrefix && text.includes(this.settings.inlineSmilesPrefix)) { this.processInlineString(n, text, this.settings.inlineSmilesPrefix, 'smiles', ctx.sourcePath); }
@@ -358,7 +408,6 @@ export default class ChemEditPlugin extends Plugin {
             })
         );
 
-        // CORE: File Renderers (Always On)
         const fileCodeblockProcessor = async (source: string, el: HTMLElement, ctx: any, defaultFormat: string) => {
             const wrapper = this.createBaseWrapper(`Loading preview...`); el.appendChild(wrapper);
             const rawData = source.trim(); const bracketMatch = rawData.match(/\[\[(.*?)\]\]/); let filenameToSearch = "";
@@ -424,21 +473,73 @@ export default class ChemEditPlugin extends Plugin {
         }
     }
 
-    // --- HELPER METHODS ---
-
+    // --- ACTIVATION HELPERS ---
     async activateNavigator() {
         const { workspace } = this.app;
         let leaf = workspace.getLeavesOfType(CHEM_NAVIGATOR_VIEW_TYPE)[0];
-        if (!leaf) {
-            const rightLeaf = workspace.getRightLeaf(false);
-            if (rightLeaf) { await rightLeaf.setViewState({ type: CHEM_NAVIGATOR_VIEW_TYPE, active: true }); leaf = rightLeaf; }
-        }
+        if (!leaf) { const rightLeaf = workspace.getRightLeaf(false); if (rightLeaf) { await rightLeaf.setViewState({ type: CHEM_NAVIGATOR_VIEW_TYPE, active: true }); leaf = rightLeaf; } }
         if (leaf) workspace.revealLeaf(leaf);
+    }
+	
+    async activateElnDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(ELN_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: ELN_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+	
+    async activateOrdersDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(ORDERS_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: ORDERS_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+	
+    async activateInventoryDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(INVENTORY_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: INVENTORY_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+
+    async activateEquipmentDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(EQUIPMENT_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: EQUIPMENT_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+
+    async activateProtocolsDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(PROTOCOLS_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: PROTOCOLS_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+
+    async activateLibraryDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(LIBRARY_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: LIBRARY_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+
+    async activateGalleryDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(GALLERY_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: GALLERY_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+
+    async activateCharacterizationDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(CHARACTERIZATION_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: CHARACTERIZATION_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
     }
 
     openNewDrawingModal() {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView); if (!view) { new Notice("Please open a Markdown file first to insert a drawing."); return; }
-        new KetcherModal(this, "", "smiles", (newData, isFile, newFormat) => {
+        new KetcherModal(this, "", "smiles", (newData: string, isFile: boolean, newFormat?: string) => {
             if (isFile) { const cursor = view.editor.getCursor(); view.editor.replaceRange(`!${newData}\n`, cursor); view.editor.setCursor({ line: cursor.line + 1, ch: 0 }); } 
             else { this.insertSmilesAtCursor(view.editor, newData, newFormat || "smiles"); }
         }).open();
@@ -702,221 +803,4 @@ export default class ChemEditPlugin extends Plugin {
             }).open();
         });
     }
-
-    buildLivePreviewPlugin() {
-        const plugin = this;
-        class ChemInlineWidget extends WidgetType {
-            constructor(public data: string, public type: 'smiles'|'file', public plugin: ChemEditPlugin) { super(); }
-            eq(other: ChemInlineWidget) { return this.data === other.data && this.type === other.type; }
-            toDOM() {
-                const wrapper = document.createElement("span"); wrapper.className = "chem-inline-widget"; wrapper.style.display = "inline-block"; wrapper.style.verticalAlign = "middle"; wrapper.style.cursor = "pointer"; wrapper.style.margin = "0 4px"; wrapper.innerHTML = `⏳`;
-                requestAnimationFrame(async () => {
-                    if (this.type === 'smiles') { const el = await plugin.renderMoleculeToPreview(this.data, 'smiles', true); wrapper.empty(); if (el) wrapper.appendChild(el); else wrapper.innerHTML = '❌'; } 
-                    else {
-                        const cleanName = this.data.replace('[[', '').replace(']]', ''); const file = plugin.app.metadataCache.getFirstLinkpathDest(cleanName, "");
-                        if (file && file instanceof TFile) {
-                            const format = file.extension.toLowerCase(); const fileData = await plugin.app.vault.read(file);
-                            if (format === 'svg') { const extracted = extractDataFromSvg(fileData); if (extracted) { wrapper.empty(); const svgContainer = document.createElement("span"); svgContainer.innerHTML = plugin.namespaceSvgIds(fileData); const svgNode = svgContainer.querySelector('svg'); if (svgNode) {  svgNode.style.width = `${plugin.settings.inlineWidth}px`;  svgNode.style.height = `${plugin.settings.inlineHeight}px`;  } wrapper.appendChild(svgContainer); return; } else { wrapper.innerHTML = '❌'; return; } }
-                            const el = await plugin.renderMoleculeToPreview(fileData, format, true); wrapper.empty(); if (el) wrapper.appendChild(el); else wrapper.innerHTML = '❌';
-                        } else { wrapper.innerHTML = '❌'; }
-                    }
-                });
-                return wrapper;
-            }
-        }
-
-        return ViewPlugin.fromClass(class {
-            decorations: DecorationSet;
-            constructor(view: EditorView) { this.decorations = this.buildDecorations(view); this.processEmbeds(view); }
-            update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged || update.selectionSet) { this.decorations = this.buildDecorations(update.view); setTimeout(() => this.processEmbeds(update.view), 50); } }
-            buildDecorations(view: EditorView) {
-                const builder = new RangeSetBuilder<Decoration>(); const prefixSmiles = plugin.settings.inlineSmilesPrefix; const prefixMol = plugin.settings.inlineMolPrefix;
-                if (!prefixSmiles && !prefixMol) return builder.finish();
-                for (let {from, to} of view.visibleRanges) {
-                    const text = view.state.doc.sliceString(from, to); let match; const escapeRegex = (s: string) => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-                    const regexSrc = []; if (prefixSmiles) regexSrc.push(`(?:${escapeRegex(prefixSmiles)}[^\\s]+)`); if (prefixMol) regexSrc.push(`(?:${escapeRegex(prefixMol)}[^\\s]+)`); const regex = new RegExp(regexSrc.join('|'), 'g');
-                    while ((match = regex.exec(text)) !== null) {
-                        const start = from + match.index; const end = start + match[0].length; const hasCursorInside = view.state.selection.ranges.some(r => r.from >= start && r.to <= end); if (hasCursorInside) continue;
-                        const isSmiles = prefixSmiles && match[0].startsWith(prefixSmiles); const prefixLen = isSmiles ? prefixSmiles.length : prefixMol.length; const data = match[0].substring(prefixLen);
-                        builder.add(start, end, Decoration.replace({ widget: new ChemInlineWidget(data, isSmiles ? 'smiles' : 'file', plugin) }));
-                    }
-                }
-                return builder.finish();
-            }
-            processEmbeds(view: EditorView) {
-                const embeds = view.dom.querySelectorAll('.internal-embed'); const activeExts = plugin.getSupportedExts();
-                embeds.forEach(embed => {
-                    const src = embed.getAttribute('src'); if (!src) return; const lowerSrc = src.toLowerCase(); const hasExt = activeExts.some(ext => lowerSrc.endsWith(`.${ext}`));
-                    if (hasExt) { if (embed.hasAttribute('data-chem-preview-done')) return; embed.setAttribute('data-chem-preview-done', 'true'); plugin.injectNativeEmbed(embed as HTMLElement, src, ""); }
-                });
-            }
-        }, { decorations: v => v.decorations });
-    }
-}
-
-class ChemFileView extends TextFileView {
-    plugin: ChemEditPlugin; constructor(leaf: WorkspaceLeaf, plugin: ChemEditPlugin) { super(leaf); this.plugin = plugin; }
-    getViewType() { return "chem-file-view"; } getDisplayText() { return this.file ? this.file.name : "Molecule View"; } getIcon() { return "hexagon"; } getViewData() { return this.data; }
-    async setViewData(data: string, clear: boolean) {
-        this.data = data; const container = this.contentEl; container.empty();
-        const wrapper = container.createDiv(); wrapper.style.display = "flex"; wrapper.style.alignItems = "center"; wrapper.style.justifyContent = "center"; wrapper.style.width = "100%"; wrapper.style.height = "100%"; wrapper.style.cursor = "pointer"; wrapper.title = "Double-click to edit"; wrapper.innerHTML = `<div class="color-text-muted">Loading preview...</div>`;
-        const format = this.file?.extension === 'cdxml' ? 'cdxml' : 'mol';
-        requestAnimationFrame(async () => { const previewEl = await this.plugin.renderMoleculeToPreview(data, format); wrapper.empty(); if (previewEl) { wrapper.appendChild(previewEl); } else { wrapper.appendChild(this.plugin.createErrorCard("Failed to load view")); } });
-        wrapper.ondblclick = () => {
-            new KetcherModal(this.plugin, this.data, format, async (newData, isFile, newFormat) => {
-                if (isFile) { new Notice(`Saved as new file: ${newData}`); return; }
-                if (newFormat && newFormat !== format) { new Notice(`Format was upgraded to ${newFormat}. Please rename the file extension!`); }
-                this.data = newData; this.requestSave(); this.setViewData(newData, false); 
-            }).open();
-        };
-    }
-    clear() { this.data = ""; this.contentEl.empty(); }
-}
-
-class KetcherModal extends Modal {
-    plugin: ChemEditPlugin; initialData: string; format: string; onSave: (data: string, isFile: boolean, format?: string) => void; ketcherInstance: any = null; reactRoot: any = null; isSavingAsFile: string | null = null;
-    constructor(plugin: ChemEditPlugin, initialData: string, format: string, onSave: (data: string, isFile: boolean, format?: string) => void) {
-        super(plugin.app); this.plugin = plugin; this.initialData = initialData; this.format = format; this.onSave = onSave;
-    }
-    onOpen() {
-        this.plugin.destroyHeadlessKetcher(); const { contentEl } = this; contentEl.empty();
-        if (this.format === 'svg') { const ex = extractDataFromSvg(this.initialData); if (ex) { this.initialData = ex.data; } }
-        this.modalEl.style.width = "85vw"; this.modalEl.style.height = "85vh"; contentEl.style.height = "100%"; contentEl.style.display = "flex"; contentEl.style.flexDirection = "column";
-        const reactContainer = contentEl.createDiv(); reactContainer.style.flex = "1 1 auto"; reactContainer.style.width = "100%"; reactContainer.style.minHeight = "400px"; reactContainer.style.position = "relative";
-        const element = React.createElement(KetcherReact, {
-            data: this.initialData, onInit: async (ketcher: any) => { this.ketcherInstance = ketcher; if (this.plugin.settings.useAcsSettings) { try { await ketcher.setSettings({ bondThickness: 1.2, bondLength: 20, stereoBondWidth: 3, fontsz: 10, fontszsub: 7, hashSpacing: 1.5 }); } catch (e) {} } }, onChange: () => {}
-        });
-        if (createRoot) { this.reactRoot = createRoot(reactContainer); this.reactRoot.render(element); } else { ReactDOM.render(element, reactContainer); }
-
-        const btnContainer = contentEl.createDiv(); btnContainer.style.display = "flex"; btnContainer.style.justifyContent = "flex-end"; btnContainer.style.marginTop = "10px"; btnContainer.style.paddingTop = "10px"; btnContainer.style.gap = "10px";
-        const saveBtn = btnContainer.createEl("button", { text: "Save", cls: "mod-cta" }); const saveFileBtn = btnContainer.createEl("button", { text: "Save as File..." }); const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
-
-        const doSave = async (formatToGet: string) => {
-            if (!this.ketcherInstance || (!this.ketcherInstance.editor && !this.ketcherInstance.server)) { 
-                new Notice("Ketcher is still initializing..."); 
-                return; 
-            }
-            try {
-                let resultData = ""; 
-                let finalFormat = formatToGet.toLowerCase(); 
-                const isPolyglotSvg = finalFormat === 'svg' || finalFormat === 'ketcher.svg';
-                
-                try {
-                    if (isPolyglotSvg) {
-                        const ket = await this.ketcherInstance.getKet(); 
-                        let svgText = "";
-                        const img = await this.ketcherInstance.generateImage(ket, { outputFormat: 'svg' });
-                        if (typeof img === 'string') { 
-                            if (img.startsWith('data:image/svg+xml;base64,')) svgText = atob(img.split(',')[1]); 
-                            else if (img.startsWith('data:image/svg+xml;utf8,')) svgText = decodeURIComponent(img.split(',')[1]); 
-                            else svgText = img; 
-                        } else if (img instanceof Blob) { 
-                            svgText = await img.text(); 
-                        }
-                        resultData = embedDataInSvg(svgText, ket, 'ket'); 
-                        finalFormat = 'svg'; 
-                    } else {
-                        const k = this.ketcherInstance;
-
-                        // Safe wrapper to cleanly fallback if a specific export method crashes
-                        const tryExport = async (primary: () => Promise<string>, fallback: () => Promise<string>) => {
-                            try { return await primary(); } catch (e) { return await fallback(); }
-                        };
-
-                        switch(finalFormat) {
-                            case 'smiles': resultData = await k.getSmiles(); break;
-                            case 'ket': resultData = await k.getKet(); break;
-                            case 'inchi': resultData = await k.getInchi(); break;
-                            case 'smarts': resultData = await k.getSmarts(); break;
-                            case 'fasta': resultData = await tryExport(() => k.getFasta(), () => k.getMolfile()); break;
-                            case 'sequence': resultData = await tryExport(() => k.getSequence(), () => k.getMolfile()); break;
-                            case 'idt': resultData = await tryExport(() => k.getIdt(), () => k.getMolfile()); break;
-                            case 'helm': resultData = await tryExport(() => k.getHelm(), () => k.getMolfile()); break;
-                            case 'biln': resultData = await tryExport(() => (typeof k.getBiln === 'function' ? k.getBiln() : k.getMolfile()), () => k.getMolfile()); break;
-                            case 'cdxml': resultData = await tryExport(() => (typeof k.getCDXml === 'function' ? k.getCDXml() : k.getCdxml()), () => k.getMolfile()); break;
-                            case 'rxn': resultData = await tryExport(() => (typeof k.getRxn === 'function' ? k.getRxn() : k.getRxnfile()), () => k.getMolfile()); break;
-                            case 'mol':
-                            case 'sdf':
-                            default: resultData = await k.getMolfile(); break;
-                        }
-                    }
-                } catch (err: any) {
-                    if (err.message && err.message.toLowerCase().includes('reaction')) {
-                        resultData = await this.ketcherInstance.getKet(); 
-                        finalFormat = "ket"; 
-                        new Notice("Reactions cannot be saved in this format. Automatically upgraded to .KET format.");
-                        if (this.isSavingAsFile) { 
-                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-zA-Z0-9]+$/i, '.ket'); 
-                        }
-                    } else { 
-                        console.warn("Primary save failed, forcing fallback to .ket", err);
-                        resultData = await this.ketcherInstance.getKet();
-                        finalFormat = "ket";
-                        new Notice(`Export to requested format failed. Saved as .ket instead to prevent data loss.`);
-                        if (this.isSavingAsFile) { 
-                            this.isSavingAsFile = this.isSavingAsFile.replace(/\.[a-zA-Z0-9]+$/i, '.ket'); 
-                        }
-                    }
-                }
-
-                if (!resultData) {
-                    new Notice("Failed to generate structure data. Format may not be supported by this structure.");
-                    return;
-                }
-
-                if (this.isSavingAsFile) { 
-                    let fileName = this.isSavingAsFile; 
-                    let counter = 1;
-                    let finalFileName = fileName;
-                    const pathParts = fileName.split('/');
-                    const baseFile = pathParts.pop() || fileName;
-                    const dir = pathParts.length > 0 ? pathParts.join('/') + '/' : '';
-                    
-                    while (this.plugin.app.vault.getAbstractFileByPath(finalFileName)) {
-                        finalFileName = dir + baseFile.replace(/\.([a-zA-Z0-9]+)$/, `-${counter}.$1`);
-                        counter++;
-                    }
-
-                    await this.plugin.app.vault.create(finalFileName, resultData); 
-                    this.onSave(`[[${finalFileName}]]`, true, finalFormat); 
-                } else { 
-                    this.onSave(resultData, false, finalFormat); 
-                }
-                this.close();
-            } catch (e: any) { 
-                console.error(e);
-                new Notice("Error saving from Ketcher: " + (e.message || e)); 
-            }
-        };
-
-        saveBtn.onclick = () => doSave(this.format);
-        saveFileBtn.onclick = () => {
-            new SaveFileModal(this.plugin.app, (filename, selectedFormat) => {
-                let safeName = filename.trim(); safeName = safeName.replace(/\.(mol|cdxml|ket|sdf|rxn|svg|fasta|sequence|idt|helm|biln)$/i, '');
-                const ext = selectedFormat === 'ketcher.svg' ? 'svg' : selectedFormat; safeName += '.' + ext;
-                this.isSavingAsFile = safeName; doSave(selectedFormat);
-            }).open();
-        };
-        cancelBtn.onclick = () => this.close();
-    }
-    onClose() {
-        try { const editor = this.ketcherInstance?.editor; if (editor) { if (editor.events) { editor.events = { on: () => {}, off: () => {}, emit: () => {} }; } if (editor.shortcuts && typeof editor.shortcuts.disable === 'function') { editor.shortcuts.disable(); } } } catch (e) { }
-        const container = this.contentEl.querySelector("div");
-        if (container) { if (this.reactRoot) { this.reactRoot.unmount(); this.reactRoot = null; } else { ReactDOM.unmountComponentAtNode(container); } }
-        this.contentEl.empty(); this.plugin.bootHeadlessKetcher();
-    }
-}
-
-class SaveFileModal extends Modal {
-    onSubmit: (filename: string, format: string) => void; filename: string = ""; format: string = "mol";
-    constructor(app: App, onSubmit: (filename: string, format: string) => void) { super(app); this.onSubmit = onSubmit; }
-    onOpen() {
-        const { contentEl } = this; contentEl.createEl("h3", { text: "Save as File..." });
-        new Setting(contentEl).setName("Filename").setDesc("Enter a name for the new chemical file.").addText(text => text.setPlaceholder("molecule").onChange(value => { this.filename = value; }).inputEl.addEventListener("keypress", (e) => { if (e.key === "Enter" && this.filename) { this.submit(); } }));
-        new Setting(contentEl).setName("Format").setDesc("Select the file format to save as.").addDropdown(drop => drop.addOption("mol", ".mol (MDL Molfile)").addOption("cdxml", ".cdxml (ChemDraw)").addOption("ket", ".ket (Ketcher Native)").addOption("rxn", ".rxn (MDL Rxnfile)").addOption("sdf", ".sdf (Structure Data)").addOption("fasta", ".fasta (FASTA Sequence)").addOption("sequence", ".sequence (Raw Sequence)").addOption("idt", ".idt (IDT Sequence)").addOption("helm", ".helm (HELM Macromolecule)").addOption("biln", ".biln (BILN Macromolecule)").addOption("ketcher.svg", ".svg (Ketcher SVG)").setValue("mol").onChange(value => { this.format = value; }));
-        new Setting(contentEl).addButton(btn => btn.setButtonText("Save File").setCta().onClick(() => this.submit()));
-        setTimeout(() => { const input = contentEl.querySelector('input[type="text"]') as HTMLInputElement; if (input) input.focus(); }, 50);
-    }
-    submit() { if (this.filename.trim()) { this.onSubmit(this.filename, this.format); this.close(); } else { new Notice("Please enter a filename."); } }
-    onClose() { this.contentEl.empty(); }
 }

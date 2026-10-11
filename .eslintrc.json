@@ -1,0 +1,9 @@
+{
+  "parser": "@typescript-eslint/parser",
+  "plugins": ["@typescript-eslint"],
+  "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+  "rules": {
+    "no-undef": "error",         // Catches missing imports like `Setting`
+    "no-constant-condition": "warn" // Helps catch infinite loops like while(true)
+  }
+}
