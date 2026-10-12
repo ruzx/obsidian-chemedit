@@ -99,7 +99,7 @@ export async function calculateMwOffline(smiles: string, plugin?: any): Promise<
     return fallbackMW(smiles);
 }
 
-export function fallbackMW(smiles: string) {
+function fallbackMW(smiles: string) {
     let mw = 0;
     // Explicitly grab standard elements including metals to prevent regex grouping errors
     const els = smiles.match(/(Cl|Br|Na|Mg|Ca|Fe|Pd|Si|Se|Te|Zn|Cu|Ni|Co|Mn|Cr|V|Ti|Sc|K|Li|B|C|N|O|F|P|S|I|c|n|o|p|s)/g);
@@ -520,8 +520,6 @@ export class SharedElnRenderer {
                 }));
                 menu.showAtMouseEvent(e);
             });
-			
-
 
             createBtn("⚡ Macros", "Insert useful text snippets", (e?: MouseEvent) => {
                 if (!e) return;
@@ -555,45 +553,6 @@ export class SharedElnRenderer {
                     appendSmart(md, "Analytical Data"); new Notice(`Added ${filename}`);
                 }).open();
             });
-			
-			// --- NEW: SHARE TO WEB BUTTON ---
-            createBtn("🌐 Share", "Create Web Link for Collaborators", () => {
-                try {
-                    const exportData = { reactants: [] as any[], products: [] as any[] };
-                    
-                    // Map Obsidian's internal ELN data to the format the Web Viewer expects
-                    const mapCompound = (c: any) => ({
-                        id: Math.random().toString(36).substring(2, 9),
-                        smiles: c.smiles || "",
-                        name: c.name || "Compound",
-                        mw: c.mw || 0,
-                        eq: c.eq || null,
-                        mmol: c.mmol || null,
-                        mass: c.mass || null,
-                        mass_isolated: c.mass_isolated || null,
-                        yield: c.yield || null,
-                        theory_mmol: c.theory_mmol || null
-                    });
-
-                    if (data.reactants) exportData.reactants = data.reactants.map(mapCompound);
-                    if (data.products) exportData.products = data.products.map(mapCompound);
-
-                    // Serialize to Base64 and build the URL
-                    const jsonStr = JSON.stringify(exportData);
-                    const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
-                    
-                    // Point to your exact GitHub Pages Viewer
-                    const viewerUrl = `https://ruzx.github.io/elnviewer.html#eln=${b64}`;
-
-                    navigator.clipboard.writeText(viewerUrl);
-                    new Notice("🔗 Web link copied to clipboard!");
-                    
-                    // REMOVED window.open(viewerUrl, '_blank'); so it doesn't interrupt the user
-                } catch (e) {
-                    new Notice("Failed to generate share link.");
-                }
-            });
-
 
             createBtn("📋 Copy", "Copy Stoichiometry Table to Clipboard", () => {
                 let tsv = "Type\tName\tSMILES\tEq\tMW\tm [mg]\tn [mmol]\tV [mL]\tYield [%]\n";

@@ -1,4 +1,5 @@
 // ChemEditAPI.ts
+import { App } from 'obsidian';
 import { ChemDataEngine } from './ChemDataEngine';
 import { getCompoundLibrary, addCompoundToLibrary, createNewElnExperiment } from './SharedEln';
 import type ChemEditPlugin from './main';

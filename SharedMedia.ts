@@ -1,5 +1,5 @@
 // SharedMedia.ts
-import { App, Modal, Platform } from 'obsidian';
+import { App, Modal, Notice, Platform } from 'obsidian';
 
 export async function saveMediaFile(app: App, arrayBuffer: ArrayBuffer, savePath: string, filename: string): Promise<string> {
     let path = savePath;

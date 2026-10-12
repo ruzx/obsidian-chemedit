@@ -1,5 +1,5 @@
 // SharedGallery.ts
-import { TFile } from 'obsidian';
+import { App, TFile, Notice } from 'obsidian';
 
 export class SharedGalleryRenderer {
     plugin: any;

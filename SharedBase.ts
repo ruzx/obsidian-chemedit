@@ -2,7 +2,6 @@
 import { App, Modal, Notice, requestUrl, TFile } from 'obsidian';
 import { CreateExperimentModal, createNewElnExperiment } from './SharedEln';
 import { ChemDataEngine } from './ChemDataEngine';
-import * as QRCode from 'qrcode'; // Offline QR Code generation
 
 export class ChemDatabaseRenderer {
     plugin: any;
@@ -17,7 +16,7 @@ export class ChemDatabaseRenderer {
         try { config = parseYaml(source); } catch (e) { config = { type: 'library', folder: '', layout: 'table' }; }
 
         const folderPath = config.folder || config.path || "";
-        const dbType = config.type || "library"; // "library", "inventory", "eln", "equipment"
+        const dbType = config.type || "library"; // "library", "inventory", "eln"
         const layout = config.layout || "table"; // "table" or "grid"
 
         if (!folderPath) {
@@ -49,11 +48,7 @@ export class ChemDatabaseRenderer {
         // --- TOOLBAR ---
         const toolbar = wrapper.createDiv({ attr: { style: "display: flex; justify-content: space-between; align-items: center; padding: 12px 15px; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); flex-wrap: wrap; gap: 10px;" }});
         
-        let titleText = "📚 Compound Library";
-        if (dbType === 'inventory') titleText = "📦 Chemical Inventory";
-        else if (dbType === 'equipment') titleText = "🔬 Lab Equipment Tracker";
-        else if (dbType === 'eln') titleText = "🧪 ELN Database";
-        
+        const titleText = dbType === 'inventory' ? "📦 Chemical Inventory" : dbType === 'eln' ? "🧪 ELN Database" : "📚 Compound Library";
         toolbar.createEl("h3", { text: titleText, attr: { style: "margin: 0; font-size: 16px; font-weight: 600;" }});
 
         const rightTools = toolbar.createDiv({ attr: { style: "display: flex; gap: 10px; align-items: center; flex-wrap: wrap;" }});
@@ -62,22 +57,10 @@ export class ChemDatabaseRenderer {
         activeSearchBadge.innerHTML = `<span>⬡ Substructure Active</span><button style="background:transparent; border:none; color:inherit; padding:0; height:auto; cursor:pointer;">✖</button>`;
         const clearBadgeBtn = activeSearchBadge.querySelector("button") as HTMLElement;
 
-        if (dbType !== 'equipment') {
-            const smartsBtn = rightTools.createEl("button", { text: "⬡ Substructure", attr: { style: "font-size: 12px; height: 28px;" }});
-            smartsBtn.onclick = async () => {
-                this.plugin.openKetcherModal("", "smiles", (query: string) => {
-                    if (!query || query.trim() === "") return;
-                    currentQuery = query;
-                    isSubstructActive = true;
-                    activeSearchBadge.style.display = "flex";
-                    applyFilters();
-                });
-            };
-        }
-        
+        const smartsBtn = rightTools.createEl("button", { text: "⬡ Substructure", attr: { style: "font-size: 12px; height: 28px;" }});
         const searchInput = rightTools.createEl("input", { 
             type: "search", 
-            placeholder: "Search database...", 
+            placeholder: "Search name, SMILES, formula...", 
             attr: { style: "width: 220px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--background-modifier-border);" } 
         });
         const addBtn = rightTools.createEl("button", { text: "➕ Add Item", cls: "mod-cta", attr: { style: "font-size: 12px; height: 28px;" }});
@@ -105,8 +88,6 @@ export class ChemDatabaseRenderer {
                     fm.name = elnData.code || file.basename;
                     fm.formula = elnData.status || "Planned";
                     fm.mw = fm.date || "";
-                } else if (dbType === 'equipment') {
-                    smiles = ""; // Equipment doesn't need structures
                 } else if (!smiles) continue;
 
                 const card = gridContainer.createDiv({ attr: { style: "border: 1px solid var(--background-modifier-border); border-radius: 8px; overflow: hidden; background: var(--background-primary); cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column;" }});
@@ -114,41 +95,34 @@ export class ChemDatabaseRenderer {
                 card.onmouseout = () => { card.style.transform = "translateY(0)"; card.style.boxShadow = "0 2px 4px rgba(0,0,0,0.05)"; card.style.borderColor = "var(--background-modifier-border)"; };
                 card.onclick = () => this.plugin.app.workspace.getLeaf(false).openFile(file);
 
-                if (dbType !== 'equipment') {
-                    const previewWrapper = card.createDiv({ attr: { style: "height: 160px; display: flex; align-items: center; justify-content: center; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); padding: 10px;" }});
-                    previewWrapper.innerHTML = `<span class="color-text-muted" style="font-size:12px;">⏳</span>`;
-                    
-                    requestAnimationFrame(async () => {
-                        const originalW = this.plugin.settings.width; const originalH = this.plugin.settings.height;
-                        this.plugin.settings.width = 200; this.plugin.settings.height = 140;
+                const previewWrapper = card.createDiv({ attr: { style: "height: 160px; display: flex; align-items: center; justify-content: center; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); padding: 10px;" }});
+                previewWrapper.innerHTML = `<span class="color-text-muted" style="font-size:12px;">⏳</span>`;
+                
+                requestAnimationFrame(async () => {
+                    const originalW = this.plugin.settings.width; const originalH = this.plugin.settings.height;
+                    this.plugin.settings.width = 200; this.plugin.settings.height = 140;
+                    try {
+                        let previewEl;
                         try {
-                            let previewEl;
-                            try {
-                                previewEl = await this.plugin.renderMoleculeToPreview(smiles, 'smiles', false);
-                            } catch {
-                                if (smiles.includes('>>')) previewEl = await this.plugin.renderMoleculeToPreview(smiles.split('>>')[1], 'smiles', false);
-                            }
-                            previewWrapper.empty();
-                            if (previewEl) { previewEl.style.maxWidth = '100%'; previewEl.style.maxHeight = '100%'; previewWrapper.appendChild(previewEl); } 
-                            else previewWrapper.innerHTML = `<span class="color-text-muted">No structure</span>`;
-                        } catch { previewWrapper.innerHTML = `❌`; }
-                        finally { this.plugin.settings.width = originalW; this.plugin.settings.height = originalH; }
-                    });
-                }
+                            previewEl = await this.plugin.renderMoleculeToPreview(smiles, 'smiles', false);
+                        } catch {
+                            if (smiles.includes('>>')) previewEl = await this.plugin.renderMoleculeToPreview(smiles.split('>>')[1], 'smiles', false);
+                        }
+                        previewWrapper.empty();
+                        if (previewEl) { previewEl.style.maxWidth = '100%'; previewEl.style.maxHeight = '100%'; previewWrapper.appendChild(previewEl); } 
+                        else previewWrapper.innerHTML = `<span class="color-text-muted">No structure</span>`;
+                    } catch { previewWrapper.innerHTML = `❌`; }
+                    finally { this.plugin.settings.width = originalW; this.plugin.settings.height = originalH; }
+                });
 
                 const details = card.createDiv({ attr: { style: "padding: 12px; display: flex; flex-direction: column; gap: 4px;" }});
                 details.createEl("div", { text: fm.name || file.basename, attr: { style: "font-weight: 600; font-size: 14px; color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" }});
                 
                 const metaRow = details.createDiv({ attr: { style: "display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted);" }});
-                if (dbType === 'equipment') {
-                    metaRow.createEl("span", { text: fm.location || "Unassigned" });
-                    metaRow.createEl("span", { text: fm.status || "Available" });
-                } else {
-                    metaRow.createEl("span", { text: fm.formula || "-" });
-                    metaRow.createEl("span", { text: fm.mw ? `${fm.mw} g/mol` : "-" });
-                }
+                metaRow.createEl("span", { text: fm.formula || "-" });
+                metaRow.createEl("span", { text: fm.mw ? `${fm.mw} g/mol` : "-" });
 
-                const searchableText = `${fm.name} ${fm.formula} ${smiles} ${file.basename} ${fm.location} ${fm.status}`.toLowerCase();
+                const searchableText = `${fm.name} ${fm.formula} ${smiles} ${file.basename}`.toLowerCase();
                 rows.push({ el: card, text: searchableText, smiles: smiles });
             }
 
@@ -162,8 +136,7 @@ export class ChemDatabaseRenderer {
             const tr = thead.createEl("tr");
 
             let columns = [];
-            if (dbType === 'inventory') columns = ["Structure", "Name", "Location", "Amount", "Status", "Actions"];
-            else if (dbType === 'equipment') columns = ["Instrument", "Location", "Status", "Booked By", "Last Maint.", "Actions"];
+            if (dbType === 'inventory') columns = ["Structure", "Name", "Location", "Amount", "Supplier", "Purity", "Lot", "Exp."];
             else if (dbType === 'eln') columns = ["Code", "Reaction", "Status", "Date"];
             else columns = ["Structure", "Name", "MW", "Formula", "SMILES"];
 
@@ -209,72 +182,7 @@ export class ChemDatabaseRenderer {
 
                 let rowSmiles = "";
 
-                if (dbType === 'equipment') {
-                    // --- NEW LIMS EQUIPMENT TRACKER ---
-                    const tdName = row.createEl("td", { text: fm.name || file.basename, attr: { style: "padding: 10px; font-weight: 600; cursor: pointer; color: var(--text-accent);" }});
-                    tdName.onclick = () => this.plugin.app.workspace.getLeaf(false).openFile(file);
-            
-                    createEditableCell(fm.location, "location", "Unassigned");
-                    
-                    // Status Badge
-                    const statusColor = fm.status === 'In Use' ? 'var(--text-warning)' : fm.status === 'Maintenance' ? 'var(--text-error)' : 'var(--text-success)';
-                    const displayStatus = fm.status || 'Available';
-                    row.createEl("td", { innerHTML: `<span style="border: 1px solid ${statusColor}; color: ${statusColor}; padding: 2px 8px; border-radius: 12px; font-size: 11px;">${displayStatus}</span>`, attr: { style: "padding: 10px;" }});
-                    
-                    createEditableCell(fm.booked_by, "booked_by", "-");
-                    createEditableCell(fm.last_maintenance, "last_maintenance", "-");
-            
-                    // Action Buttons
-                    const actionTd = row.createEl("td", { attr: { style: "padding: 10px;" }});
-                    const toggleBtn = actionTd.createEl("button", { text: displayStatus === 'Available' ? "Book" : "Release", attr: { style: "font-size: 10px; padding: 2px 6px;" }});
-                    toggleBtn.onclick = async () => {
-                        const newStatus = displayStatus === 'Available' ? 'In Use' : 'Available';
-                        await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter: any) => { frontmatter.status = newStatus; });
-                        this.renderDatabase(source, el, ctx); // Re-render to show update
-                    };
-            
-                    searchableText += ` ${fm.name} ${fm.location} ${fm.status}`;
-            
-                } else if (dbType === 'inventory') {
-                    // --- LIMS INVENTORY UPDATE ---
-                    if (!fm.smiles && !content.includes('smiles')) continue;
-                    rowSmiles = fm.smiles || this.extractSmilesFromContent(content);
-                    this.createStructureCell(row, rowSmiles, 'smiles', 90, 90);
-                    
-                    const tdName = row.createEl("td", { text: fm.name || file.basename, attr: { style: "padding: 10px; font-weight: 600; cursor: pointer; color: var(--text-accent);" }});
-                    tdName.onclick = () => this.plugin.app.workspace.getLeaf(false).openFile(file);
-            
-                    createEditableCell(fm.location, "location", "-");
-                    createEditableCell(fm.amount, "amount", "-");
-            
-                    // LIMS Check-In/Check-Out Logic
-                    const invStatus = fm.status || 'Available';
-                    const invStatusColor = invStatus === 'Available' ? 'var(--text-success)' : 'var(--text-warning)';
-                    row.createEl("td", { innerHTML: `<span style="color: ${invStatusColor}; font-weight: bold; font-size: 11px;">${invStatus}</span><br><span style="font-size:9px; color:var(--text-muted);">${fm.checked_out_by || ''}</span>`, attr: { style: "padding: 10px;" }});
-            
-                    // Action Buttons (Check Out & QR Code)
-                    const actionTd = row.createEl("td", { attr: { style: "padding: 10px; display: flex; gap: 4px; flex-direction: column;" }});
-                    
-                    const checkoutBtn = actionTd.createEl("button", { text: invStatus === 'Available' ? "📤 Check Out" : "📥 Return", attr: { style: "font-size: 10px; padding: 2px 6px;" }});
-                    checkoutBtn.onclick = async () => {
-                        const newStatus = invStatus === 'Available' ? 'Checked Out' : 'Available';
-                        const user = newStatus === 'Checked Out' ? "Current User" : ""; 
-                        await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter: any) => { 
-                            frontmatter.status = newStatus; 
-                            frontmatter.checked_out_by = user;
-                            frontmatter.last_updated = window.moment().format("YYYY-MM-DD");
-                        });
-                        this.renderDatabase(source, el, ctx);
-                    };
-            
-                    const qrBtn = actionTd.createEl("button", { text: "🖨️ QR Label", attr: { style: "font-size: 10px; padding: 2px 6px;" }});
-                    qrBtn.onclick = () => {
-                        new QrCodeModal(this.plugin.app, file).open();
-                    };
-            
-                    searchableText += ` ${fm.name} ${fm.location} ${fm.supplier}`;
-
-                } else if (dbType === 'eln') {
+                if (dbType === 'eln') {
                     const blockMatch = content.match(/```eln\s*\n([\s\S]*?)\n```/);
                     if (!blockMatch) continue;
                     const elnData = parseYaml(blockMatch[1]);
@@ -299,6 +207,22 @@ export class ChemDatabaseRenderer {
                     createEditableCell(fm.date, "date", "-");
                     
                     searchableText += ` ${elnData.code} ${elnData.status}`;
+
+                } else if (dbType === 'inventory') {
+                    if (!fm.smiles && !content.includes('smiles')) continue;
+                    rowSmiles = fm.smiles || this.extractSmilesFromContent(content);
+                    this.createStructureCell(row, rowSmiles, 'smiles', 90, 90);
+                    
+                    const tdName = row.createEl("td", { text: fm.name || file.basename, attr: { style: "padding: 10px; font-weight: 600; cursor: pointer; color: var(--text-accent);" }});
+                    tdName.onclick = () => this.plugin.app.workspace.getLeaf(false).openFile(file);
+
+                    createEditableCell(fm.location, "location", "-");
+                    createEditableCell(fm.amount, "amount", "-");
+                    createEditableCell(fm.supplier, "supplier", "-");
+                    createEditableCell(fm.purity, "purity", "-");
+                    createEditableCell(fm.lot, "lot", "-");
+                    createEditableCell(fm.expiration, "expiration", "-");
+                    searchableText += ` ${fm.name} ${fm.location} ${fm.supplier}`;
 
                 } else {
                     if (!fm.smiles && !content.includes('smiles')) continue;
@@ -349,12 +273,21 @@ export class ChemDatabaseRenderer {
             applyFilters();
         };
 
+        smartsBtn.onclick = async () => {
+            this.plugin.openKetcherModal("", "smiles", (query: string) => {
+                if (!query || query.trim() === "") return;
+                currentQuery = query;
+                isSubstructActive = true;
+                activeSearchBadge.style.display = "flex";
+                applyFilters();
+            });
+        };
+
         addBtn.onclick = () => {
             if (dbType === 'inventory') {
                 new AddInventoryModal(this.plugin.app, this.plugin, folderPath, () => this.renderDatabase(source, el, ctx)).open();
-            } else if (dbType === 'equipment') {
-                this.createEquipmentFile(folderPath, () => this.renderDatabase(source, el, ctx));
             } else if (dbType === 'eln') {
+                // FIXED Auto-Increment parameters
                 new CreateExperimentModal(this.plugin.app, this.plugin, this.plugin.settings.elnPrefix, folderPath, async (expCode: string) => {
                     await createNewElnExperiment(this.plugin.app, expCode, folderPath, this.plugin.settings.elnSections);
                     this.renderDatabase(source, el, ctx); 
@@ -363,26 +296,6 @@ export class ChemDatabaseRenderer {
                 addCompoundToLibrary(this.plugin.app, this.plugin, folderPath, () => this.renderDatabase(source, el, ctx));
             }
         };
-    }
-
-    async createEquipmentFile(folder: string, onComplete: () => void) {
-        const name = "New Equipment " + window.moment().format("HHmmss");
-        const safeName = name.replace(/[\\/:"*?<>|]/g, '_');
-        const content = `---
-tags: [equipment]
-name: "${name}"
-location: "Unassigned"
-status: "Available"
-booked_by: ""
-last_maintenance: "${window.moment().format("YYYY-MM-DD")}"
----
-# ${name}
-**Operating Instructions / Notes:**
-`;
-        if (!await this.plugin.app.vault.adapter.exists(folder)) await this.plugin.app.vault.createFolder(folder);
-        await this.plugin.app.vault.create(`${folder}/${safeName}.md`, content);
-        new Notice("Equipment added!");
-        onComplete();
     }
 
     extractSmilesFromContent(content: string): string {
@@ -446,6 +359,7 @@ smiles: "${smi}"
 # ${name}
 \`\`\`smiles\n${smi}\n\`\`\`\n`;
         
+        // Ensure folder exists before saving
         if (!await app.vault.adapter.exists(folder)) await app.vault.createFolder(folder);
         
         await app.vault.create(`${folder}/${safeName}.md`, content);
@@ -499,8 +413,6 @@ formula: "${this.data.formula}"
 mw: ${this.data.mw || 0}
 location: "${this.data.location}"
 amount: "${this.data.amount}"
-status: "Available"
-checked_out_by: ""
 supplier: "${this.data.supplier}"
 cas: "${this.data.cas}"
 lot: "${this.data.lot}"
@@ -540,85 +452,4 @@ smiles: "${this.data.smiles}"
         }
     }
     onClose() { this.contentEl.empty(); }
-}
-
-export class QrCodeModal extends Modal {
-    file: TFile;
-    qrDataUrl: string = "";
-
-    constructor(app: App, file: TFile) {
-        super(app);
-        this.file = file;
-    }
-
-    async onOpen() {
-        const { contentEl } = this;
-        contentEl.empty();
-        
-        // Generate the Obsidian URI to open this specific file
-        const vaultName = encodeURIComponent(this.app.vault.getName());
-        const filePath = encodeURIComponent(this.file.path);
-        const obsidianUri = `obsidian://open?vault=${vaultName}&file=${filePath}`;
-
-        contentEl.createEl("h3", { text: "Print Sample Label", attr: { style: "text-align: center; margin-bottom: 5px;" }});
-        contentEl.createEl("p", { text: this.file.basename, attr: { style: "text-align: center; color: var(--text-muted); font-size: 12px; margin-top: 0;" }});
-
-        const qrContainer = contentEl.createDiv({ attr: { style: "display: flex; justify-content: center; padding: 20px; background: white; border-radius: 8px; width: 200px; margin: 0 auto 20px auto;" }});
-        
-        try {
-            // Generates the QR code offline via the installed 'qrcode' package
-            this.qrDataUrl = await QRCode.toDataURL(obsidianUri, { width: 150, margin: 1 });
-            qrContainer.createEl("img", { attr: { src: this.qrDataUrl, width: "150", height: "150" }});
-        } catch (err) {
-            qrContainer.createEl("span", { text: "Failed to generate QR code offline.", cls: "color-text-error" });
-        }
-
-        const printBtn = contentEl.createEl("button", { text: "Print Label", cls: "mod-cta", attr: { style: "width: 100%;" }});
-        printBtn.onclick = () => {
-            if (!this.qrDataUrl) return;
-            const printWindow = window.open('', '_blank');
-            if (printWindow) {
-                printWindow.document.write(`
-                    <html><head><title>Print Label</title></head>
-                    <body style="display:flex; justify-content:center; align-items:center; height:100vh; margin:0;">
-                        <div style="text-align:center; font-family:sans-serif;">
-                            <img src="${this.qrDataUrl}" width="100" height="100" />
-                            <div style="font-size:10px; margin-top:5px; font-weight:bold;">${this.file.basename}</div>
-                        </div>
-                        <script>window.onload = function() { window.print(); window.close(); }</script>
-                    </body></html>
-                `);
-                printWindow.document.close();
-            }
-        };
-    }
-
-    onClose() {
-        this.contentEl.empty();
-    }
-}
-
-// Dashboards
-export function renderLimsNav(parent: HTMLElement, activeTab: string, plugin: any) {
-    const navSwitcher = parent.createDiv({ attr: { style: "display: flex; gap: 20px; margin-bottom: 12px; flex-wrap: wrap;" }});
-    const s = plugin.settings;
-    
-    const makeNav = (text: string, id: string, onClick: () => void) => {
-        const isActive = id === activeTab;
-        const el = navSwitcher.createEl("span", { text, attr: { style: `font-size: 13px; font-weight: ${isActive ? '700' : '600'}; color: ${isActive ? 'var(--text-normal)' : 'var(--text-muted)'}; border-bottom: 2px solid ${isActive ? 'var(--interactive-accent)' : 'transparent'}; cursor: ${isActive ? 'default' : 'pointer'}; transition: color 0.2s; padding-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;` }});
-        if (!isActive) {
-            el.onmouseover = () => el.style.color = "var(--text-normal)";
-            el.onmouseout = () => el.style.color = "var(--text-muted)";
-            el.onclick = onClick;
-        }
-    };
-
-    if (s.enableElnDashboard) makeNav("🧪 ELN", "eln", () => plugin.activateElnDashboard());
-    if (s.enableOrdersDashboard) makeNav("🛒 Orders", "orders", () => plugin.activateOrdersDashboard());
-    if (s.enableInventoryDashboard) makeNav("📦 Inventory", "inventory", () => plugin.activateInventoryDashboard());
-    if (s.enableEquipmentDashboard) makeNav("🔬 Equipment", "equipment", () => plugin.activateEquipmentDashboard());
-    if (s.enableProtocolsDashboard) makeNav("📄 Protocols", "protocols", () => plugin.activateProtocolsDashboard());
-    if (s.enableLibraryDashboard) makeNav("📚 Library", "library", () => plugin.activateLibraryDashboard());
-    if (s.enableGalleryDashboard) makeNav("🖼️ Gallery", "gallery", () => plugin.activateGalleryDashboard());
-    if (s.enableCharacterizationDashboard) makeNav("📊 Data", "data", () => plugin.activateCharacterizationDashboard());
 }
