@@ -11,6 +11,7 @@ import { EditorView, ViewPlugin, ViewUpdate, WidgetType, Decoration, DecorationS
 import { ChemEditSettings, DEFAULT_SETTINGS, ChemEditSettingTab } from './Settings';
 import { ChemEditAPI, buildChemEditAPI } from './ChemEditAPI';
 import { CHEM_NAVIGATOR_VIEW_TYPE, ChemNavigatorView } from './ChemNavigator';
+import { ELN_DASHBOARD_VIEW_TYPE, ElnDashboardView } from './ElnDashboard';
 import { SynthesisMapRenderer } from './SharedPathway';
 import { SharedElnRenderer, createNewElnExperiment, CreateExperimentModal, ElnGalleryRenderer, getCompoundLibrary, CompoundSuggestModal, AddToLibraryModal, addCompoundToLibrary, calculateMwOffline } from './SharedEln';
 import { takeStandardPhoto, saveMediaFile, TlcModal } from './SharedMedia';
@@ -40,6 +41,7 @@ export function extractDataFromSvg(svgStr: string): { format: string, data: stri
 export default class ChemEditPlugin extends Plugin {
     settings: ChemEditSettings;
     public api: ChemEditAPI; 
+    public scriptEngine: any = null; // Stubbed until ScriptEngine module is added
     
     hiddenKetcherContainer: HTMLDivElement;
     headlessKetcher: any = null;
@@ -50,6 +52,7 @@ export default class ChemEditPlugin extends Plugin {
     cameraRibbonEl: HTMLElement | null = null;
     tlcRibbonEl: HTMLElement | null = null;
     elnRibbonEl: HTMLElement | null = null;
+    dashboardRibbonEl: HTMLElement | null = null;
     navigatorRibbonEl: HTMLElement | null = null;
 
     getSupportedExts(): string[] { return this.settings.supportedEmbedExtensions.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0); }
@@ -69,7 +72,7 @@ export default class ChemEditPlugin extends Plugin {
             const ex = extractDataFromSvg(data);
             if (ex) {
                 openData = ex.data;
-                openFormat = 'svg'; // We still want KetcherModal to treat it as SVG output
+                openFormat = 'svg'; 
             } else {
                 new Notice("Not a Ketcher SVG");
                 return;
@@ -95,7 +98,6 @@ export default class ChemEditPlugin extends Plugin {
         }).open();
     }
 
-    // FIXED SVG NAMESPACING: Prevents double-prefixing of xlink:href
     namespaceSvgIds(svgText: string): string {
         const uniquePrefix = `k-${Math.random().toString(36).substring(2, 9)}-`;
         return svgText
@@ -107,7 +109,6 @@ export default class ChemEditPlugin extends Plugin {
     }
 
     refreshRibbonIcons() {
-        // Fume Hood Icons
         if (this.settings.showMediaRibbonIcons) {
             if (!this.cameraRibbonEl) {
                 this.cameraRibbonEl = this.addRibbonIcon('camera', 'Take Lab Photo', () => {
@@ -137,7 +138,6 @@ export default class ChemEditPlugin extends Plugin {
             if (this.tlcRibbonEl) this.tlcRibbonEl.style.display = 'none';
         }
 
-        // ELN Ribbon Icon
         if (this.settings.showElnRibbonIcon && this.settings.enableEln) {
             if (!this.elnRibbonEl) {
                 this.elnRibbonEl = this.addRibbonIcon('flask-round', 'Create Blank ELN Experiment', () => {
@@ -152,7 +152,15 @@ export default class ChemEditPlugin extends Plugin {
             if (this.elnRibbonEl) this.elnRibbonEl.style.display = 'none';
         }
 
-        // Navigator Ribbon Icon
+        // LIMS Dashboard Icon Addition
+        if (this.settings.showDashboardRibbonIcon && this.settings.enableEln) {
+            if (!this.dashboardRibbonEl) {
+                this.dashboardRibbonEl = this.addRibbonIcon('chem-dashboard', 'Open LIMS Dashboard', () => { this.activateElnDashboard(); });
+            } else { this.dashboardRibbonEl.style.display = ''; }
+        } else {
+            if (this.dashboardRibbonEl) this.dashboardRibbonEl.style.display = 'none';
+        }
+
         if (this.settings.enableNavigator && this.settings.showNavigatorRibbonIcon) {
             if (!this.navigatorRibbonEl) {
                 this.navigatorRibbonEl = this.addRibbonIcon('chem-navigator', 'Open Chem Navigator', () => { this.activateNavigator(); });
@@ -163,26 +171,29 @@ export default class ChemEditPlugin extends Plugin {
     }
 
     async onload() {
-        // Hexagon with internal structure
         addIcon('flask-round', `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="5" d="M 42 35 L 42 55 A 18 18 0 1 0 58 55 L 58 35 Z" stroke-linejoin="round"/><line x1="36" y1="35" x2="64" y2="35" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><line x1="32" y1="65" x2="68" y2="65" stroke="currentColor" stroke-width="4" stroke-dasharray="4 4"/>`);
-        
-        // Chemical Compass in a Hexagon
         const compassIcon = `<polygon fill="none" stroke="currentColor" stroke-width="6" points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5" stroke-linejoin="round"/><polygon points="50,18 64,50 50,82 36,50" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><polygon points="50,18 64,50 50,50" fill="currentColor"/><polygon points="50,82 36,50 50,50" fill="currentColor"/>`;
         addIcon('chem-navigator', compassIcon);
-        addIcon('flask-conical', compassIcon); // Overwrite so the ChemNavigator view gets the properly scaled icon too
+        addIcon('flask-conical', compassIcon);
+        
+        // New LIMS Dashboard Icon
+        const dashboardIcon = `<path fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" d="M 20 85 A 10 10 0 0 1 30 75 L 85 75" /><path fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" d="M 30 15 L 85 15 L 85 85 L 30 85 A 10 10 0 0 1 20 75 L 20 25 A 10 10 0 0 1 30 15 Z" /><polygon fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round" points="57,32 72,40 72,58 57,66 42,58 42,40" />`;
+        addIcon('chem-dashboard', dashboardIcon);
         
         await this.loadSettings();
         this.api = buildChemEditAPI(this);
         this.addSettingTab(new ChemEditSettingTab(this.app, this));
 
-        // 1. Headless Setup
         this.hiddenKetcherContainer = document.createElement('div');
         this.hiddenKetcherContainer.className = 'chemedit-headless-ketcher';
         Object.assign(this.hiddenKetcherContainer.style, { position: 'absolute', top: '-10000px', left: '-10000px', width: '800px', height: '600px', opacity: '0', pointerEvents: 'none', zIndex: '-1' });
         document.body.appendChild(this.hiddenKetcherContainer);
-        this.app.workspace.onLayoutReady(() => { this.bootHeadlessKetcher(); });
+        
+        this.app.workspace.onLayoutReady(() => { 
+            this.bootHeadlessKetcher(); 
+            // ScriptEngine loading would happen here when module is added
+        });
 
-        // 2. View Registrations
         const extsForView = this.getSupportedExts().filter(ext => ext !== 'svg');
         this.registerView("chem-file-view", (leaf) => new ChemFileView(leaf, this));
         this.registerExtensions(extsForView, "chem-file-view");
@@ -190,68 +201,132 @@ export default class ChemEditPlugin extends Plugin {
         this.registerEditorExtension(this.buildLivePreviewPlugin());
         this.addRibbonIcon('hexagon', 'Draw New Molecule', () => { this.openNewDrawingModal(); });
 
-        // MODULE: Chem Navigator
+        this.refreshRibbonIcons();
+
+        // --- OPTIONAL MODULES ---
+
         if (this.settings.enableNavigator) {
             this.registerView(CHEM_NAVIGATOR_VIEW_TYPE, (leaf) => new ChemNavigatorView(leaf, this));
             this.addCommand({ id: 'open-chem-navigator', name: 'Open Chem Navigator', callback: () => { this.activateNavigator(); } });
         }
 
-        this.refreshRibbonIcons();
-
-        // MODULE: Context Menus
         if (this.settings.enableContextMenu) {
-            this.registerEvent(
-                this.app.workspace.on('file-menu', (menu, file) => {
-                    if (file instanceof TFile) {
-                        const ext = file.extension.toLowerCase();
-                        if (ext === 'svg') {
-                            menu.addItem((item) => {
-                                item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const extracted = extractDataFromSvg(data);
-                                    if (extracted) {
-                                        new KetcherModal(this, data, "svg", async (newData) => {
-                                            await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
-                                        }).open();
-                                    } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
-                                });
+            this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
+                if (file instanceof TFile) {
+                    const ext = file.extension.toLowerCase();
+                    if (ext === 'svg') {
+                        menu.addItem((item) => {
+                            item.setTitle("Edit SVG in Ketcher").setIcon("hexagon").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const extracted = extractDataFromSvg(data);
+                                if (extracted) {
+                                    new KetcherModal(this, data, "svg", async (newData) => {
+                                        await this.app.vault.modify(file, newData); new Notice(`Saved ${file.name}`);
+                                    }).open();
+                                } else { new Notice("This SVG does not contain editable Ketcher metadata."); }
                             });
-                        }
-                        const activeExts = this.getSupportedExts();
-                        if (activeExts.includes(ext) && ext !== 'svg') {
-                            menu.addSeparator();
-                            menu.addItem((item) => {
-                                item.setTitle("➕ Add to Compound Database").setIcon("flask-round").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const targetFolder = this.settings.elnDirectory || "Library";
-                                    addCompoundToDatabase(this.app, this, targetFolder, () => {}, data);
-                                });
-                            });
-                            menu.addItem((item) => {
-                                item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
-                                    const data = await this.app.vault.read(file);
-                                    const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
-                                    if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
-                                    else new Notice("Could not extract SMILES for NMR prediction.");
-                                });
-                            });
-                        }
+                        });
                     }
-                })
-            );
-
-            this.registerEvent(
-                this.app.workspace.on('editor-menu', (menu, editor, view) => {
-                    const selection = editor.getSelection().trim();
-                    if (selection && selection.length < 500 && !selection.includes('\n')) {
+                    const activeExts = this.getSupportedExts();
+                    if (activeExts.includes(ext) && ext !== 'svg') {
                         menu.addSeparator();
-                        populateChemicalMenu(menu, this, selection);
+                        menu.addItem((item) => {
+                            item.setTitle("➕ Add to Compound Database").setIcon("flask-round").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const targetFolder = this.settings.elnDirectory || "Library";
+                                addCompoundToDatabase(this.app, this, targetFolder, () => {}, data);
+                            });
+                        });
+                        menu.addItem((item) => {
+                            item.setTitle("📈 Predict 1H NMR").setIcon("activity").onClick(async () => {
+                                const data = await this.app.vault.read(file);
+                                const smiles = (ext === 'mol' || ext === 'sdf') ? ChemDataEngine.molToSmiles(data) : data.trim();
+                                if (smiles) window.open(`https://www.nmrdb.org/simulator/?smiles=${encodeURIComponent(smiles)}`);
+                                else new Notice("Could not extract SMILES for NMR prediction.");
+                            });
+                        });
                     }
-                })
-            );
+                }
+            }));
+
+            this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
+                const selection = editor.getSelection().trim();
+                if (selection && selection.length < 500 && !selection.includes('\n')) {
+                    menu.addSeparator();
+                    populateChemicalMenu(menu, this, selection);
+                }
+            }));
         }
 
-        // CORE COMMANDS
+        // Scripting engine stubs (prevents command palette crashes until module is fully implemented)
+        if (this.settings.enableScripting) {
+            this.addCommand({
+                id: 'reload-chemedit-scripts',
+                name: 'Reload Custom Scripts',
+                callback: () => new Notice("Script Engine coming soon!")
+            });
+            this.addCommand({
+                id: 'open-chemedit-script-store',
+                name: 'Open Script Store',
+                callback: () => new Notice("Script Store coming soon!")
+            });
+        }
+
+        if (this.settings.enableEln) {
+            this.addCommand({ id: 'insert-compound-library', name: 'Insert Compound Library Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: library\npath: Library/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-inventory-database', name: 'Insert Chemical Inventory Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: inventory\npath: Inventory/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-equipment-database', name: 'Insert Lab Equipment / Instrument Tracker', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: equipment\npath: Equipment/\nlayout: table\n\`\`\`\n`) });
+            this.addCommand({ id: 'insert-eln-gallery', name: 'Insert ELN Experiment Gallery', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`eln-gallery\npath: Experiments/\n\`\`\`\n`) });
+            
+            this.addCommand({
+                id: 'insert-from-library', name: 'Insert SMILES from Library',
+                editorCallback: async (editor: Editor) => {
+                    const lib = await getCompoundLibrary(this);
+                    new CompoundSuggestModal(this.app, lib, (selected) => { editor.replaceSelection(selected.smiles); }).open();
+                }
+            });
+
+            this.registerMarkdownCodeBlockProcessor("chem-db", async (source, el, ctx) => { const r = new ChemDatabaseRenderer(this); await r.renderDatabase(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => { const r = new SharedGalleryRenderer(this); await r.renderChemGallery(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => { const r = new ElnGalleryRenderer(this); await r.renderGalleryBlock(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => { const elnRenderer = new SharedElnRenderer(this); await elnRenderer.renderElnBlock(source, el, ctx); });
+
+            // Dashboards Registration
+            if (this.settings.enableElnDashboard) {
+                this.registerView(ELN_DASHBOARD_VIEW_TYPE, (leaf) => new ElnDashboardView(leaf, this));
+                this.addCommand({ id: 'open-eln-dashboard', name: 'Open ELN Dashboard', callback: () => this.activateElnDashboard() });
+            }
+            if (this.settings.enableInventoryDashboard) {
+                this.addCommand({ id: 'open-inventory-dashboard', name: 'Open Chemical Inventory Dashboard', callback: () => this.activateInventoryDashboard() });
+            }
+            if (this.settings.enableEquipmentDashboard) {
+                this.addCommand({ id: 'open-equipment-dashboard', name: 'Open Lab Equipment Dashboard', callback: () => this.activateEquipmentDashboard() });
+            }
+            if (this.settings.enableProtocolsDashboard) {
+                this.addCommand({ id: 'open-protocols-dashboard', name: 'Open Lab Protocols Dashboard', callback: () => this.activateProtocolsDashboard() });
+            }
+            if (this.settings.enableLibraryDashboard) {
+                this.addCommand({ id: 'open-library-dashboard', name: 'Open Compounds Library Dashboard', callback: () => this.activateLibraryDashboard() });
+            }
+            if (this.settings.enableGalleryDashboard) {
+                this.addCommand({ id: 'open-gallery-dashboard', name: 'Open Drawings Gallery Dashboard', callback: () => this.activateGalleryDashboard() });
+            }
+            if (this.settings.enableCharacterizationDashboard) {
+                this.addCommand({ id: 'open-characterization-dashboard', name: 'Open Compound Data Organizer', callback: () => this.activateCharacterizationDashboard() });
+            }
+            if (this.settings.enableOrdersDashboard) {
+                this.addCommand({ id: 'open-orders-dashboard', name: 'Open Orders Dashboard', callback: () => this.activateOrdersDashboard() });
+            }
+        }
+
+        if (this.settings.enablePathways) {
+            this.addCommand({ id: 'insert-synthesis-map', name: 'Insert Synthesis Map (Auto-Graph)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-map\n\`\`\`\n`); }});
+            this.addCommand({ id: 'insert-synthesis-plan', name: 'Insert Synthesis Plan (Manual Flowchart)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-plan\n[[EXP-001]] -> [[EXP-002]] -> C1=CC=CC=C1\n\`\`\`\n`); }});
+            this.registerMarkdownCodeBlockProcessor("synthesis-map", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderMap(source, el, ctx); });
+            this.registerMarkdownCodeBlockProcessor("synthesis-plan", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderPlan(source, el, ctx); });
+        }
+
+        // --- CORE COMMANDS ---
         this.addCommand({
             id: 'insert-new-molecule', name: 'Draw new SMILES molecule',
             editorCallback: (editor: Editor) => {
@@ -299,41 +374,10 @@ export default class ChemEditPlugin extends Plugin {
             }
         });
 
-        // MODULE: ELN & DATABASES
-        if (this.settings.enableEln) {
-            this.addCommand({ id: 'insert-compound-library', name: 'Insert Compound Library Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: library\npath: Library/\nlayout: table\n\`\`\`\n`) });
-            this.addCommand({ id: 'insert-inventory-database', name: 'Insert Chemical Inventory Database', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`chem-db\ntype: inventory\npath: Inventory/\nlayout: table\n\`\`\`\n`) });
-            this.addCommand({ id: 'insert-eln-gallery', name: 'Insert ELN Experiment Gallery', editorCallback: (editor: Editor) => editor.replaceSelection(`\`\`\`eln-gallery\npath: Experiments/\n\`\`\`\n`) });
-            this.addCommand({
-                id: 'insert-from-library', name: 'Insert SMILES from Library',
-                editorCallback: async (editor: Editor) => {
-                    const lib = await getCompoundLibrary(this);
-                    new CompoundSuggestModal(this.app, lib, (selected) => { editor.replaceSelection(selected.smiles); }).open();
-                }
-            });
-
-            this.registerMarkdownCodeBlockProcessor("chem-db", async (source, el, ctx) => { const r = new ChemDatabaseRenderer(this); await r.renderDatabase(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("chem-gallery", async (source, el, ctx) => { const r = new SharedGalleryRenderer(this); await r.renderChemGallery(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("eln-gallery", async (source, el, ctx) => { const r = new ElnGalleryRenderer(this); await r.renderGalleryBlock(source, el, ctx); });
-            
-            this.registerMarkdownCodeBlockProcessor("eln", async (source, el, ctx) => {
-                const elnRenderer = new SharedElnRenderer(this); 
-                await elnRenderer.renderElnBlock(source, el, ctx);
-            });
-        }
-
-        // MODULE: PATHWAYS
-        if (this.settings.enablePathways) {
-            this.addCommand({ id: 'insert-synthesis-map', name: 'Insert Synthesis Map (Auto-Graph)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-map\n\`\`\`\n`); }});
-            this.addCommand({ id: 'insert-synthesis-plan', name: 'Insert Synthesis Plan (Manual Flowchart)', editorCallback: (editor: Editor) => { editor.replaceSelection(`\`\`\`synthesis-plan\n[[EXP-001]] -> [[EXP-002]] -> C1=CC=CC=C1\n\`\`\`\n`); }});
-            this.registerMarkdownCodeBlockProcessor("synthesis-map", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderMap(source, el, ctx); });
-            this.registerMarkdownCodeBlockProcessor("synthesis-plan", async (source, el, ctx) => { const r = new SynthesisMapRenderer(this); await r.renderPlan(source, el, ctx); });
-        }
-
-        // CORE: Post Processors (Always On)
+        // --- CORE PROCESSORS ---
         this.registerMarkdownPostProcessor(async (el, ctx) => {
             const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null); const nodes: Text[] = []; let node;
-            while (node = walker.nextNode()) nodes.push(node as Text);
+            while ((node = walker.nextNode())) nodes.push(node as Text);
             for (const n of nodes) {
                 const text = n.nodeValue || "";
                 if (this.settings.inlineSmilesPrefix && text.includes(this.settings.inlineSmilesPrefix)) { this.processInlineString(n, text, this.settings.inlineSmilesPrefix, 'smiles', ctx.sourcePath); }
@@ -358,7 +402,6 @@ export default class ChemEditPlugin extends Plugin {
             })
         );
 
-        // CORE: File Renderers (Always On)
         const fileCodeblockProcessor = async (source: string, el: HTMLElement, ctx: any, defaultFormat: string) => {
             const wrapper = this.createBaseWrapper(`Loading preview...`); el.appendChild(wrapper);
             const rawData = source.trim(); const bracketMatch = rawData.match(/\[\[(.*?)\]\]/); let filenameToSearch = "";
@@ -424,17 +467,28 @@ export default class ChemEditPlugin extends Plugin {
         }
     }
 
-    // --- HELPER METHODS ---
-
+    // --- ACTIVATION HELPERS ---
     async activateNavigator() {
         const { workspace } = this.app;
         let leaf = workspace.getLeavesOfType(CHEM_NAVIGATOR_VIEW_TYPE)[0];
-        if (!leaf) {
-            const rightLeaf = workspace.getRightLeaf(false);
-            if (rightLeaf) { await rightLeaf.setViewState({ type: CHEM_NAVIGATOR_VIEW_TYPE, active: true }); leaf = rightLeaf; }
-        }
+        if (!leaf) { const rightLeaf = workspace.getRightLeaf(false); if (rightLeaf) { await rightLeaf.setViewState({ type: CHEM_NAVIGATOR_VIEW_TYPE, active: true }); leaf = rightLeaf; } }
         if (leaf) workspace.revealLeaf(leaf);
     }
+	
+    async activateElnDashboard() {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(ELN_DASHBOARD_VIEW_TYPE)[0];
+        if (!leaf) { const newLeaf = workspace.getLeaf(true); await newLeaf.setViewState({ type: ELN_DASHBOARD_VIEW_TYPE, active: true }); leaf = newLeaf; }
+        workspace.revealLeaf(leaf);
+    }
+	
+    activateOrdersDashboard() { new Notice("Orders Dashboard coming soon!"); }
+    activateInventoryDashboard() { new Notice("Inventory Dashboard coming soon!"); }
+    activateEquipmentDashboard() { new Notice("Equipment Dashboard coming soon!"); }
+    activateProtocolsDashboard() { new Notice("Protocols Dashboard coming soon!"); }
+    activateLibraryDashboard() { new Notice("Library Dashboard coming soon!"); }
+    activateGalleryDashboard() { new Notice("Gallery Dashboard coming soon!"); }
+    activateCharacterizationDashboard() { new Notice("Characterization Dashboard coming soon!"); }
 
     openNewDrawingModal() {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView); if (!view) { new Notice("Please open a Markdown file first to insert a drawing."); return; }
@@ -818,7 +872,6 @@ class KetcherModal extends Modal {
                     } else {
                         const k = this.ketcherInstance;
 
-                        // Safe wrapper to cleanly fallback if a specific export method crashes
                         const tryExport = async (primary: () => Promise<string>, fallback: () => Promise<string>) => {
                             try { return await primary(); } catch (e) { return await fallback(); }
                         };

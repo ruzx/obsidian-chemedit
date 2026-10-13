@@ -17,17 +17,7 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 📝 Release Notes
 
-### 🚀 What's New in ChemEdit 
-
-**⚡ (1.3.8-1.4.1)**
-
-- **Glyph Bug Fixed:** Resolved `.cdxml` atom mutation issues in notes with multiple embeds (thanks @poeticmedic!).
-- **Modular Core:** Keep it lightweight—disable unused features (ELN, Pathways, Context Menus) via Advanced Settings.
-- **Chem Navigator:** New side-panel to browse ELN Projects, Library, Inventory, and Vault Search.
-
-
-
-**⚡ (1.3.5-1.3.7)**
+### 🚀 What's New in ChemEdit 1.3.5-1.3.7
 
 - Fixed MW (changed engine) auto-calculation bugs for complex stereobonds conjugated to aromatic rings (e.g., `/` or `\` next to ring closures `C=1`) (thanks @Snipinium!).
 - Fixed a YAML parsing error caused by backslashes in SMILES strings (e.g., geometric isomers). (thanks @ignorgchem!).

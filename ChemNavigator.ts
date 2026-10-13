@@ -140,18 +140,19 @@ export class ChemNavigatorView extends ItemView {
         }
     }
 
+    // Replace the loadLayout and saveLayout functions at approx line ~135 with:
+
     private loadLayout() {
         try {
-            const saved = window.localStorage.getItem('chemedit-context-layout');
-            if (saved) {
-                const parsed = JSON.parse(saved);
+            const saved = this.plugin.settings.contextLayout;
+            if (saved && saved.length > 0) {
                 this.contextLayout = DEFAULT_CONTEXT_LAYOUT.map(def => {
-                    const found = parsed.find((p:any) => p.id === def.id);
+                    const found = saved.find((p:any) => p.id === def.id);
                     return found ? { ...def, visible: found.visible } : def;
                 });
                 this.contextLayout.sort((a, b) => {
-                    const idxA = parsed.findIndex((p:any) => p.id === a.id);
-                    const idxB = parsed.findIndex((p:any) => p.id === b.id);
+                    const idxA = saved.findIndex((p:any) => p.id === a.id);
+                    const idxB = saved.findIndex((p:any) => p.id === b.id);
                     return (idxA > -1 ? idxA : 99) - (idxB > -1 ? idxB : 99);
                 });
                 return;
@@ -160,7 +161,10 @@ export class ChemNavigatorView extends ItemView {
         this.contextLayout = JSON.parse(JSON.stringify(DEFAULT_CONTEXT_LAYOUT));
     }
 
-    private saveLayout() { window.localStorage.setItem('chemedit-context-layout', JSON.stringify(this.contextLayout)); }
+    private saveLayout() { 
+        this.plugin.settings.contextLayout = this.contextLayout.map(w => ({ id: w.id, visible: w.visible }));
+        this.plugin.saveSettings();
+    }
 
     private applyLayout() {
         Object.values(this.widgets).forEach(w => w.remove());
