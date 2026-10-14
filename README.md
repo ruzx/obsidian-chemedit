@@ -22,11 +22,17 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 - **Settings UI:** Settings are now neatly grouped in collapsible accordions with granular toggles to hide unused dashboards.
 - **Web Sharing:** Instantly generate shareable web links ELN reactions.
 
+
+ELN Dashboard demo:
+<img width="400" alt="ELN_dashboard" src="https://github.com/user-attachments/assets/e33be377-f5d6-4893-b7c6-0444c5bfbcd6" />
+
+  
+
 - **⚡ (1.3.8-1.4.1)**
 - **Glyph Bug Fixed:** Fixed an issue where atoms would visually mutate when rendering .cdxml (e.g., Nitrogen rendering as Carbon) when multiple files are embedded in the same note (thanks @poeticmedic!).
 - **Modular Core:** You can now **disable features you don't use** (like ELN, Pathways, or Context Menus) in Advanced Settings.
 - **Chem Navigator side-panel:** ELN Projects, Library, Inventory, and  Structure Search.
-- 
+
 
 ### 🚀 What's New in ChemEdit 1.3.5-1.3.7
 
