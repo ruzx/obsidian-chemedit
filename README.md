@@ -24,6 +24,7 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 
 ELN Dashboard demo:
+
 <img width="400" alt="ELN_dashboard" src="https://github.com/user-attachments/assets/e33be377-f5d6-4893-b7c6-0444c5bfbcd6" />
 
   
