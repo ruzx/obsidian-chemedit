@@ -8,6 +8,8 @@ export interface ChemEditSettings {
     enablePathways: boolean;
     enableContextMenu: boolean;
     enableScripting: boolean;
+    enableExcalidrawBridge: boolean;
+    enableCanvasBridge: boolean;
 
     enableElnDashboard: boolean;
     enableInventoryDashboard: boolean;
@@ -46,7 +48,7 @@ export interface ChemEditSettings {
 
 export const DEFAULT_SETTINGS: ChemEditSettings = {
     enableEln: true, enableNavigator: true, enablePathways: true, enableContextMenu: true, 
-    enableScripting: false, 
+    enableScripting: false, enableExcalidrawBridge: true, enableCanvasBridge: true,
     
     enableElnDashboard: true, enableInventoryDashboard: true, enableOrdersDashboard: true, enableEquipmentDashboard: true,
     enableProtocolsDashboard: true, enableLibraryDashboard: true, enableGalleryDashboard: true, enableCharacterizationDashboard: true,
@@ -121,6 +123,8 @@ export class ChemEditSettingTab extends PluginSettingTab {
         const modSec = this.createAccordion(containerEl, "Active Modules & Dashboards", "🧩");
         modSec.createEl('p', { text: "Turn off features you don't use to save memory and declutter the command palette. (Restart Obsidian for changes to take effect).", cls: "setting-item-description" });
         
+        new Setting(modSec).setName('Enable Excalidraw Bridge').setDesc('Injects the chemical drawing toolbar into Excalidraw files.').addToggle(t => t.setValue(this.plugin.settings.enableExcalidrawBridge).onChange(async (v) => { this.plugin.settings.enableExcalidrawBridge = v; await this.plugin.saveSettings(); }));
+        new Setting(modSec).setName('Enable Obsidian Canvas Bridge').setDesc('Injects the chemical drawing toolbar into native Obsidian Canvas files.').addToggle(t => t.setValue(this.plugin.settings.enableCanvasBridge).onChange(async (v) => { this.plugin.settings.enableCanvasBridge = v; await this.plugin.saveSettings(); }));
         new Setting(modSec).setName('Enable Core Dashboards & ELN').setDesc('Allows rendering of ```eln and enables the LIMS Dashboards.').addToggle(t => t.setValue(this.plugin.settings.enableEln).onChange(async (v) => { this.plugin.settings.enableEln = v; await this.plugin.saveSettings(); }));
         new Setting(modSec).setName('Enable Chem Navigator').setDesc('Enables the interactive side-panel for contextual chemistry analysis.').addToggle(t => t.setValue(this.plugin.settings.enableNavigator).onChange(async (v) => { this.plugin.settings.enableNavigator = v; await this.plugin.saveSettings(); }));
         new Setting(modSec).setName('Enable Synthesis Pathways').setDesc('Allows rendering of interactive ```chem-pathway and ```synthesis-plan blocks.').addToggle(t => t.setValue(this.plugin.settings.enablePathways).onChange(async (v) => { this.plugin.settings.enablePathways = v; await this.plugin.saveSettings(); }));

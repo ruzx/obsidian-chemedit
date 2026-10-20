@@ -473,12 +473,8 @@ export class SharedElnRenderer {
                 
                 if (targetLine !== -1) {
                     let insertLine = targetLine + 1;
-                    while (insertLine < lines.length && !lines[insertLine].startsWith('##')) {
-                        insertLine++;
-                    }
-                    while (insertLine > targetLine + 1 && lines[insertLine - 1].trim() === '') {
-                        insertLine--;
-                    }
+                    while (insertLine < lines.length && !lines[insertLine].startsWith('##')) insertLine++;
+                    while (insertLine > targetLine + 1 && lines[insertLine - 1].trim() === '') insertLine--;
                     editor.replaceRange(`\n${text}\n`, { line: insertLine, ch: 0 });
                 } else {
                     let info = ctx.getSectionInfo(el);
@@ -487,37 +483,78 @@ export class SharedElnRenderer {
                 }
             };
 
-            const updateYamlState = (mutate: (y: any) => void) => {
-                if (!view) return;
-                let info = ctx.getSectionInfo(el);
-                if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
-                if (!info) return;
-                const { parseYaml, stringifyYaml } = require('obsidian');
-                const blockText = view.editor.getRange({line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
-                try {
-                    const yamlObj = parseYaml(blockText);
-                    mutate(yamlObj);
-                    const newYaml = stringifyYaml(yamlObj);
-                    view.editor.replaceRange(newYaml, {line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
-                } catch (err) {}
-            };
+            // 1. AUTO-WRITE PUBLICATION PARAGRAPH
+            createBtn("🪄 Auto-Write", "Generate ACS Experimental Paragraph", () => {
+                const lr = data.reactants.find((r:any) => r.is_limiting) || data.reactants[0];
+                const others = data.reactants.filter((r:any) => r !== lr);
+                
+                let exp = `To a reaction vessel was added ${lr?.name || 'the limiting reagent'} (${lr?.mass?.toFixed(1) || '?'} mg, ${lr?.mmol?.toFixed(3) || '?'} mmol, 1.0 equiv)`;
+                if (others.length > 0) {
+                    exp += ` and ` + others.map((r:any) => `${r.name || 'reagent'} (${r.mass?.toFixed(1) || '?'} mg, ${r.mmol?.toFixed(3) || '?'} mmol, ${r.eq || '?'} equiv)`).join(', ');
+                }
+                exp += `. The mixture was dissolved in ${data.solvent || 'solvent'} (${data.solvent_volume || 'X'} mL) `;
+                if (data.atmosphere) exp += `under an atmosphere of ${data.atmosphere}. `;
+                else exp += `. `;
+                exp += `The reaction was stirred at ${data.temperature || 'room temperature'} for ${data.duration || 'the appropriate time'}. `;
+                
+                if (data.products && data.products.length > 0) {
+                    const p = data.products[0];
+                    exp += `The product ${p.name || ''} was isolated as a solid (${p.mass_isolated?.toFixed(1) || '?'} mg, ${p.yield || '?'}% yield).`;
+                }
+
+                appendSmart(`> **Generated Experimental:**\n> ${exp}`, "Procedure");
+                new Notice("Experimental paragraph generated!");
+            });
+
+            // 2. GREEN CHEMISTRY METRICS
+            createBtn("🌱 Metrics", "Calculate Green Chemistry Metrics", () => {
+                let totalReactantMass = 0;
+                let desiredProductMw = 0;
+                let totalReactantMw = 0;
+
+                data.reactants.forEach((r:any) => { 
+                    totalReactantMass += (r.mass || 0); 
+                    totalReactantMw += (r.mw || 0) * (r.eq || 1);
+                });
+                
+                const productMass = data.products?.[0]?.mass_isolated || 0;
+                desiredProductMw = data.products?.[0]?.mw || 0;
+
+                const atomEconomy = totalReactantMw > 0 ? (desiredProductMw / totalReactantMw) * 100 : 0;
+                
+                let msg = `**Green Chemistry Metrics:**\n`;
+                msg += `- **Atom Economy:** ${atomEconomy.toFixed(1)}%\n`;
+                
+                if (productMass > 0 && totalReactantMass > 0) {
+                    const eFactor = (totalReactantMass - productMass) / productMass;
+                    const pmi = totalReactantMass / productMass;
+                    msg += `- **Raw E-Factor:** ${eFactor.toFixed(2)} (Excludes solvent/water)\n`;
+                    msg += `- **Raw PMI:** ${pmi.toFixed(2)}\n`;
+                } else {
+                    msg += `_(Enter isolated product mass to calculate E-Factor/PMI)_\n`;
+                }
+
+                appendSmart(msg, "Analytical Data");
+                new Notice("Green metrics calculated!");
+            });
 
             // Status Menu Button
             createBtn("⚙️ Status", "Change Experiment Status", (e?: MouseEvent) => {
                 if (!e) return;
                 const menu = new Menu();
+                const updateYamlState = (mutate: (y: any) => void) => {
+                    if (!view) return;
+                    let info = ctx.getSectionInfo(el);
+                    if (!info && el.parentElement) info = ctx.getSectionInfo(el.parentElement);
+                    if (!info) return;
+                    const { parseYaml, stringifyYaml } = require('obsidian');
+                    const blockText = view.editor.getRange({line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0});
+                    try { const yamlObj = parseYaml(blockText); mutate(yamlObj); view.editor.replaceRange(stringifyYaml(yamlObj), {line: info.lineStart + 1, ch: 0}, {line: info.lineEnd, ch: 0}); } catch (err) {}
+                };
                 menu.addItem((item) => item.setTitle("Mark as Planned").setIcon("calendar").onClick(() => updateYamlState(y => y.status = "Planned")));
                 menu.addItem((item) => item.setTitle("Mark as Running").setIcon("play").onClick(() => updateYamlState(y => y.status = "Running")));
                 menu.addItem((item) => item.setTitle("Mark as Completed").setIcon("check").onClick(() => updateYamlState(y => y.status = "Completed")));
                 menu.addItem((item) => item.setTitle("Mark as Failed").setIcon("cross").onClick(() => updateYamlState(y => y.status = "Failed")));
-                menu.addSeparator();
-                menu.addItem((item) => item.setTitle("Recalculate MWs").setIcon("refresh-cw").onClick(() => {
-                    updateYamlState(y => {
-                        y.reactants?.forEach((r:any) => { delete r.mw; delete r.formula; });
-                        y.products?.forEach((p:any) => { delete p.mw; delete p.formula; });
-                    });
-                    new Notice("Molecular weights recalculated!");
-                }));
                 menu.showAtMouseEvent(e);
             });
 			
