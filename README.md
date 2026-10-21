@@ -20,6 +20,10 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 **⚡ (1.4.3)**
 - **Whiteboards support:** Integration with **Obsidian Canvas** and **Excalidraw** . Draw, resize, and double-click to edit molecules directly on the board.
 - **Canvas Tools:** A new floating toolbar lets you instantly extract MW/Formula/IUPAC names, copy SMILES, or search PubChem for any selected structure.
+- **LIMS Dashboards:** Added Inventory, Equipment, Orders, and Protocols.
+- **Domain-Specific ELNs helping tables:** Introducing interactive calculators for Biology (`bio-eln` helper), Analytical QC (`analytical-eln`), Polymer (`polymer-eln`) and Organic. 
+- **Green Metrics & Auto-Writer:**  generation of experimental paragraphs, E-factors, and Process Mass Intensities.
+
 
 **⚡ (1.4.2)**
 - **New LIMS Dashboards:** Full-screen, interconnected hubs for ELN experiments.
