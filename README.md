@@ -24,6 +24,11 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 - **Domain-Specific ELNs helping tables:** Introducing interactive calculators for Biology (`bio-eln` helper), Analytical QC (`analytical-eln`), Polymer (`polymer-eln`) and Organic. 
 - **Green Metrics & Auto-Writer:**  generation of experimental paragraphs, E-factors, and Process Mass Intensities.
 
+Canvas support demo:
+
+<img width="800" height="540" alt="Chemedit_canvas" src="https://github.com/user-attachments/assets/c0a6c66a-69e9-4338-90e1-5c14a7a63e83" />
+
+
 
 **⚡ (1.4.2)**
 - **New LIMS Dashboards:** Full-screen, interconnected hubs for ELN experiments.
