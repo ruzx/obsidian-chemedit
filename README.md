@@ -26,7 +26,7 @@ ChemEdit is a fully-integrated chemical structure editor and viewer. Powered by 
 
 Canvas support demo:
 
-<img width="800" height="540" alt="Chemedit_canvas" src="https://github.com/user-attachments/assets/c0a6c66a-69e9-4338-90e1-5c14a7a63e83" />
+<img width="800" height="540" alt="Chemedit_canvas_" src="https://github.com/user-attachments/assets/1bf8a0a5-a0cd-43c0-a85a-ecfda54663bc" />
 
 
 
